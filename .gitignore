@@ -1,16 +1,8 @@
-# dependencies
 node_modules/
-
-# secrets: NEVER commit
 .env
 .env.*
-!.env.example
-
-# build output
 dist/
 build/
-
-# logs and OS/editor files
 *.log
 .DS_Store
 .vscode/
