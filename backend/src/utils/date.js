@@ -22,14 +22,4 @@ function istMonthBounds(key) {
   return { start, end, daysInMonth };
 }
 
-// Turns a form date ("2026-10-07") into midnight IST. Empty means now.
-function parseInputDate(value) {
-  if (!value) return new Date();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(`${value}T00:00:00+05:30`);
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? new Date() : d;
-}
-
-const daysBetween = (from, to) => (to.getTime() - from.getTime()) / DAY_MS;
-
-module.exports = { IST_OFFSET_MS, DAY_MS, istParts, monthKey, istMonthBounds, parseInputDate, daysBetween };
+module.exports = { IST_OFFSET_MS, DAY_MS, istParts, monthKey, istMonthBounds };

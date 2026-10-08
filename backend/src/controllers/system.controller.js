@@ -1,26 +1,19 @@
 const system = require('../services/system.service');
 const settings = require('../services/settings.service');
-const audit = require('../services/audit.service');
-const { withTransaction } = require('../utils/transaction');
 const { send } = require('./respond');
 
 module.exports = {
-  listCategories: async (req, res) => send(res, await system.listCategories({ includeInactive: req.query.includeInactive === 'true' })),
+  listCategories: async (req, res) => send(res, await system.listCategories()),
   addCategory: async (req, res) => send(res, await system.addCategory(req.body), 201),
-  removeCategory: async (req, res) => send(res, await system.removeCategory(req.params.id)),
+  deleteCategory: async (req, res) => send(res, await system.deleteCategory(req.params.id)),
 
-  listCustomFields: async (req, res) => send(res, await system.listCustomFields({ includeInactive: req.query.includeInactive === 'true' })),
+  listCustomFields: async (req, res) => send(res, await system.listCustomFields(req.query.module)),
   addCustomField: async (req, res) => send(res, await system.addCustomField(req.body), 201),
-  removeCustomField: async (req, res) => send(res, await system.removeCustomField(req.params.id)),
+  deleteCustomField: async (req, res) => send(res, await system.deleteCustomField(req.params.id)),
 
   getSettings: async (req, res) => send(res, await settings.getSettings()),
-  updateSettings: async (req, res) => {
-    await withTransaction(async (session) => {
-      const changed = await settings.updateSettings(req.body, session);
-      await audit.log('UPDATE_SETTINGS', 'Settings', '', changed, session);
-    });
-    send(res, await settings.getSettings());
-  },
+  updateSettings: async (req, res) => send(res, await settings.updateSettings(req.body)),
 
-  health: async (req, res) => send(res, await system.runHealthCheck()),
+  health: async (req, res) => send(res, await system.getSystemHealth()),
+  sync: async (req, res) => send(res, await system.syncSystem()),
 };

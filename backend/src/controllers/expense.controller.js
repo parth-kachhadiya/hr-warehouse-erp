@@ -2,7 +2,7 @@ const service = require('../services/expense.service');
 const { send } = require('./respond');
 
 module.exports = {
-  list: async (req, res) => send(res, await service.listExpenses()),
+  list: async (req, res) => send(res, await service.getExpenses()),
   create: async (req, res) => send(res, await service.addExpense(req.body), 201),
-  void: async (req, res) => send(res, await service.voidExpense(req.params.id, req.body)),
+  remove: async (req, res) => send(res, await service.deleteExpense(req.params.id)),
 };

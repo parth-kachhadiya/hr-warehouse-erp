@@ -1,109 +1,90 @@
 import { useState } from 'react';
-import { addCategory, addCustomField, listCategories, listCustomFields, removeCategory, removeCustomField, runHealthCheck } from '../api/system.api';
+import { Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { addCategory, addCustomField, deleteCategory, deleteCustomField, getCategories, getCustomFields, syncSystem } from '../api/erp.api';
 import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import DataTable from '../components/common/DataTable';
-import Message from '../components/common/Message';
+import { Alert, DataTable, PageHeader, Panel } from '../components/common/ui';
 import { useModal } from '../components/common/Modal';
-import { formatDateTime } from '../utils/format';
 
 export default function SystemManagement() {
-  const data = useFetch(async () => {
-    const [categories, fields] = await Promise.all([listCategories(), listCustomFields()]);
-    return { categories, fields };
-  });
-  const { message, setMessage, run } = useAction();
+  const cats = useFetch(getCategories);
+  const fields = useFetch(() => getCustomFields('Assets'));
+  const [newCat, setNewCat] = useState('');
+  const [newField, setNewField] = useState('');
+  const [catMsg, setCatMsg] = useState(null);
+  const [fieldMsg, setFieldMsg] = useState(null);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const [syncing, setSyncing] = useState(false);
   const modal = useModal();
-  const [category, setCategory] = useState('');
-  const [field, setField] = useState('');
-  const [health, setHealth] = useState(null);
-  const refresh = () => data.reload({ silent: true });
+  const reload = () => { cats.reload(); fields.reload(); };
+  const onErr = (e) => modal.alert(`Error: ${e.message}`);
 
-  const addCat = async (e) => {
+  const addCat = (e) => {
     e.preventDefault();
-    if (await run(() => addCategory(category), `Category "${category}" added`)) { setCategory(''); refresh(); }
+    if (!newCat.trim()) return;
+    addCategory(newCat).then(() => { setNewCat(''); setCatMsg({ text: 'Category added' }); reload(); })
+      .catch((err) => setCatMsg({ err: true, text: `Error: ${err.message}` }));
   };
-  const removeCat = async (c) => {
-    if (await modal.confirm(`Remove category "${c.Name}"?`, { confirmText: 'Remove', danger: true })
-      && (await run(() => removeCategory(c.CategoryID), `Category "${c.Name}" removed`))) refresh();
+  const removeCat = async (id) => {
+    if (!(await modal.confirm('Remove this category?', { title: 'Remove category', confirmText: 'Remove', danger: true }))) return;
+    deleteCategory(id).then(reload).catch(onErr);
   };
-  const addField = async (e) => {
+  const addField = (e) => {
     e.preventDefault();
-    if (await run(() => addCustomField(field), `Field "${field}" added to the Add Product form`)) { setField(''); refresh(); }
+    if (!newField.trim()) return;
+    addCustomField('Assets', newField).then(() => { setNewField(''); setFieldMsg({ text: 'Field added' }); reload(); })
+      .catch((err) => setFieldMsg({ err: true, text: `Error: ${err.message}` }));
   };
-  const removeField = async (f) => {
-    if (await modal.confirm(`Remove field "${f.FieldName}" from the Add Product form? Saved values stay on existing products.`, { confirmText: 'Remove', danger: true })
-      && (await run(() => removeCustomField(f.FieldID), `Field "${f.FieldName}" removed`))) refresh();
+  const removeField = async (id) => {
+    if (!(await modal.confirm('Remove this field?', { title: 'Remove field', confirmText: 'Remove', danger: true }))) return;
+    deleteCustomField(id).then(reload).catch(onErr);
   };
-  const check = async () => {
-    const result = await run(runHealthCheck);
-    if (result) setHealth(result);
+  const sync = () => {
+    setSyncing(true);
+    syncSystem().then(() => {
+      setSyncMsg({ text: 'Synced — all tabs now reflect the latest categories/fields/settings.' });
+      reload();
+      setTimeout(() => setSyncMsg(null), 4000);
+    }).catch(onErr).finally(() => setSyncing(false));
   };
 
+  const catRows = cats.data || [];
+  const fieldRows = fields.data || [];
   return (
-    <div className="page">
-      <div className="page-header"><h1>System Management</h1></div>
-      <Message message={message || (data.error && { type: 'error', text: data.error })} onClose={() => setMessage(null)} />
-
-      <div className="grid-2">
-        <section className="card">
-          <h2>Categories</h2>
-          <form className="inline-form" onSubmit={addCat}>
-            <input placeholder="New category name" value={category} onChange={(e) => setCategory(e.target.value)} required />
-            <button className="btn btn-primary">Add</button>
-          </form>
-          <DataTable
-            rowKey="CategoryID"
-            rows={data.data?.categories}
-            loading={data.loading}
-            columns={[
-              { key: 'CategoryID', label: 'ID' },
-              { key: 'Name', label: 'Name' },
-              { key: 'actions', label: '', render: (c) => <button className="btn btn-small btn-danger-outline" onClick={() => removeCat(c)}>Remove</button> },
-            ]}
-          />
-        </section>
-        <section className="card">
-          <h2>Custom fields (Add Product form)</h2>
-          <form className="inline-form" onSubmit={addField}>
-            <input placeholder="New field name, e.g. Brand" value={field} onChange={(e) => setField(e.target.value)} required />
-            <button className="btn btn-primary">Add</button>
-          </form>
-          <DataTable
-            rowKey="FieldID"
-            rows={data.data?.fields}
-            loading={data.loading}
-            empty="No custom fields."
-            columns={[
-              { key: 'FieldID', label: 'ID' },
-              { key: 'FieldName', label: 'Field' },
-              { key: 'actions', label: '', render: (f) => <button className="btn btn-small btn-danger-outline" onClick={() => removeField(f)}>Remove</button> },
-            ]}
-          />
-        </section>
-      </div>
-
-      <section className="card">
-        <div className="card-header">
-          <h2>Health check</h2>
-          <button className="btn btn-secondary" onClick={check}>Run health check</button>
+    <>
+      <PageHeader title="System Management" subtitle="Add or remove categories and extra product fields. Changes apply everywhere straight away.">
+        <button className="btn btn-secondary" onClick={sync} disabled={syncing}><RefreshCw size={16} />{syncing ? 'Syncing...' : 'Sync System'}</button>
+      </PageHeader>
+      <Alert msg={syncMsg} />
+      <div className="grid-2" style={{ alignItems: 'start' }}>
+        <div>
+          <Alert msg={catMsg} />
+          <Panel title="Categories" description="Used in Add Product" flush>
+            <form noValidate onSubmit={addCat} className="panel-body" style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border)' }}>
+              <input className="input" value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="e.g. Electronics" aria-label="New Category" />
+              <button className="btn btn-primary"><Plus size={16} />Add Category</button>
+            </form>
+            <DataTable rows={cats.data ? catRows.length : -1} empty="No categories yet">
+              {catRows.map((c) => (
+                <tr key={c.CategoryID}><td className="item-cell">{c.Name}</td><td style={{ textAlign: 'right' }}><button className="btn btn-sm btn-soft-red" onClick={() => removeCat(c.CategoryID)}><Trash2 size={14} />Remove</button></td></tr>
+              ))}
+            </DataTable>
+          </Panel>
         </div>
-        <p className="muted small">Checks that every product's quantities add up (Received = Available + Reserved + Delivered + Removed), and that no IDs are duplicated or missing.</p>
-        {health && (
-          health.ok ? (
-            <div className="message message-success">All good. {health.assetsChecked} product(s) checked at {formatDateTime(health.checkedAt)}.</div>
-          ) : (
-            <DataTable
-              rows={health.issues}
-              columns={[
-                { key: 'type', label: 'Problem' },
-                { key: 'entity', label: 'Where' },
-                { key: 'message', label: 'Details' },
-              ]}
-            />
-          )
-        )}
-      </section>
-    </div>
+        <div>
+          <Alert msg={fieldMsg} />
+          <Panel title="Custom Fields" description="Extra fields on the Add Product form" flush>
+            <form noValidate onSubmit={addField} className="panel-body" style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border)' }}>
+              <input className="input" value={newField} onChange={(e) => setNewField(e.target.value)} placeholder="e.g. Brand, Warranty Period" aria-label="New Field Name" />
+              <button className="btn btn-primary"><Plus size={16} />Add Field</button>
+            </form>
+            <DataTable rows={fields.data ? fieldRows.length : -1} empty="No custom fields yet">
+              {fieldRows.map((f) => (
+                <tr key={f.FieldID}><td className="item-cell">{f.FieldName}</td><td style={{ textAlign: 'right' }}><button className="btn btn-sm btn-soft-red" onClick={() => removeField(f.FieldID)}><Trash2 size={14} />Remove</button></td></tr>
+              ))}
+            </DataTable>
+          </Panel>
+        </div>
+      </div>
+    </>
   );
 }

@@ -1,76 +1,79 @@
-import { useEffect } from 'react';
-import { getDashboard } from '../api/dashboard.api';
-import useFetch from '../hooks/useFetch';
-import StatCard from '../components/common/StatCard';
-import DataTable from '../components/common/DataTable';
-import StatusBadge from '../components/common/StatusBadge';
-import Message from '../components/common/Message';
-import { formatDateTime, formatINR, formatNumber } from '../utils/format';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AlertTriangle, Boxes, Gauge, HandCoins, IndianRupee, Megaphone, Percent, Truck, Warehouse, Wallet, Wrench, TrendingUp,
+} from 'lucide-react';
+import { getDashboardData } from '../api/erp.api';
+import { Alert, Badge, DataTable, PageHeader, Panel, Stat } from '../components/common/ui';
+import { fmt } from '../utils/format';
 
+// Refreshes every 3 seconds while the page is open and the browser tab is visible.
 export default function Dashboard() {
-  const { data, error, reload } = useFetch(getDashboard);
+  const [d, setD] = useState(null);
+  const [error, setError] = useState('');
+  const inflight = useRef(false);
 
-  // Same as the old system: refresh every 3 seconds while the page is visible.
+  const load = useCallback(async (force) => {
+    if (inflight.current && !force) return;
+    inflight.current = true;
+    try {
+      setD(await getDashboardData());
+      setError('');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      inflight.current = false;
+    }
+  }, []);
+
   useEffect(() => {
-    const id = setInterval(() => {
-      if (document.visibilityState === 'visible') reload({ silent: true });
-    }, 3000);
-    return () => clearInterval(id);
-  }, [reload]);
+    const first = setTimeout(() => load(true), 0);
+    const timer = setInterval(() => { if (!document.hidden) load(false); }, 3000);
+    const onVisible = () => { if (!document.hidden) load(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearTimeout(first); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, [load]);
 
-  const d = data;
-  const b = d?.revenueBreakdown || {};
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Dashboard</h1>
-        <span className="muted small">Auto-refreshes every 3 seconds</span>
-      </div>
-      <Message message={error ? { type: 'error', text: error } : null} />
-      {!d ? <p className="muted">Loading…</p> : (
+    <>
+      <PageHeader title="Dashboard" subtitle="Live overview of stock, sales and money. Updates every few seconds." />
+      <Alert msg={error && { err: true, text: error }} />
+      {d && (
         <>
           <div className="stats">
-            <StatCard label="GMV (total sales)" value={formatINR(d.gmv)} />
-            <StatCard label="Total revenue" value={formatINR(d.totalRevenue)} tone="green" />
-            <StatCard label="Items in stock" value={formatNumber(d.itemsInStock)} sub="units available" />
-            <StatCard label="Utilization" value={`${formatNumber(d.utilization)}%`} sub={`${formatNumber(d.usedSpace)} / ${formatNumber(d.capacity)} sq.ft`} />
-            <StatCard label="Receivable from buyers" value={formatINR(d.receivable)} tone="orange" />
-            <StatCard label="Payable to sellers" value={formatINR(d.payableToSellers)} tone="blue" />
-            <StatCard label="Dead stock alerts" value={d.deadStockAlerts} sub="30+ days in stock" tone={d.deadStockAlerts ? 'red' : undefined} />
+            <Stat icon={IndianRupee} label="Total GMV" value={fmt(d.totalGMV)} tone="brand" />
+            <Stat icon={TrendingUp} label="Total Revenue" value={fmt(d.totalRevenue)} tone="green" />
+            <Stat icon={Boxes} label="Items in Stock" value={d.itemsInStock} tone="blue" />
+            <Stat icon={Gauge} label="Warehouse Utilization" value={`${d.warehouse.utilizationPct}%`} tone="violet" />
+            <Stat icon={HandCoins} label="Receivable (from buyers)" value={fmt(d.totalReceivable)} tone={d.totalReceivable > 0 ? 'amber' : 'slate'} />
+            <Stat icon={Wallet} label="Payable (to sellers)" value={fmt(d.totalPayableToSellers)} tone={d.totalPayableToSellers > 0 ? 'amber' : 'slate'} />
+            <Stat icon={AlertTriangle} label="Dead Stock Alerts (30+ days)" value={d.deadStockAlerts} tone={d.deadStockAlerts > 0 ? 'red' : 'green'} />
           </div>
 
-          <div className="grid-2">
-            <section className="card">
-              <h2>Revenue breakdown</h2>
-              <table className="table compact">
-                <tbody>
-                  <tr><td>Commission</td><td className="num">{formatINR(b.commission)}</td></tr>
-                  <tr><td>Storage</td><td className="num">{formatINR(b.storage)}</td></tr>
-                  <tr><td>Marketing</td><td className="num">{formatINR(b.marketing)}</td></tr>
-                  <tr><td>Repair</td><td className="num">{formatINR(b.repair)}</td></tr>
-                  <tr><td>Logistics</td><td className="num">{formatINR(b.logistics)}</td></tr>
-                  <tr className="total"><td>Total</td><td className="num">{formatINR(d.totalRevenue)}</td></tr>
-                </tbody>
-              </table>
-            </section>
-            <section className="card">
-              <h2>Last 5 sales</h2>
-              <DataTable
-                rowKey="SaleID"
-                rows={d.lastSales}
-                empty="No sales yet."
-                columns={[
-                  { key: 'SaleID', label: 'Sale' },
-                  { key: 'Date', label: 'Date', render: (r) => formatDateTime(r.Date) },
-                  { key: 'ItemName', label: 'Item' },
-                  { key: 'SalePrice', label: 'Total', align: 'right', render: (r) => formatINR(r.SalePrice) },
-                  { key: 'OrderStatus', label: 'Status', render: (r) => <StatusBadge status={r.OrderStatus} /> },
-                ]}
-              />
-            </section>
+          <h2 className="section-title">Revenue breakdown</h2>
+          <div className="stats compact">
+            <Stat compact icon={Percent} label="Commission" value={fmt(d.revenueBreakdown.commission)} tone="green" />
+            <Stat compact icon={Warehouse} label="Storage" value={fmt(d.revenueBreakdown.storage)} tone="green" />
+            <Stat compact icon={Megaphone} label="Marketing" value={fmt(d.revenueBreakdown.marketing)} tone="green" />
+            <Stat compact icon={Wrench} label="Repair" value={fmt(d.revenueBreakdown.repair)} tone="green" />
+            <Stat compact icon={Truck} label="Logistics" value={fmt(d.revenueBreakdown.logistics)} tone="green" />
           </div>
+
+          <div style={{ height: 12 }} />
+          <Panel title="Recent Sales" description="Last 5 sales" flush>
+            <DataTable head={['Sale ID', 'Item', 'Buyer', 'Price', 'Status']} rows={d.recentSales.length} empty="No sales yet">
+              {d.recentSales.map((s) => (
+                <tr key={s.SaleID}>
+                  <td className="id-cell">{s.SaleID}</td>
+                  <td className="item-cell">{s.ItemName} × {s.Quantity || 1}</td>
+                  <td>{s.BuyerName || '-'}</td>
+                  <td className="strong">{fmt(s.SalePrice)}</td>
+                  <td><Badge>{s.PaymentStatus}</Badge></td>
+                </tr>
+              ))}
+            </DataTable>
+          </Panel>
         </>
       )}
-    </div>
+    </>
   );
 }

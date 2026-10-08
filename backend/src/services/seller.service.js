@@ -1,69 +1,69 @@
-// Sellers: people who store goods in the warehouse. Soft delete only (Active=false).
-const { Seller, Asset } = require('../models');
+// Sellers (same rules as getSellers / addSeller / updateSeller / deleteSeller in the old script).
+const { Seller, Asset, Sale } = require('../models');
 const { nextId } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
+const { text } = require('../utils/number');
 const AppError = require('../utils/AppError');
 const audit = require('./audit.service');
 
-const text = (v) => String(v ?? '').trim();
-const EDITABLE = ['Name', 'Phone', 'Email', 'Address', 'GSTIN', 'KYCStatus'];
-
-async function listSellers({ includeArchived = false } = {}) {
-  const filter = includeArchived ? {} : { Active: true };
-  return Seller.find(filter).sort({ SellerID: 1 }).lean();
+async function listSellers() {
+  return Seller.find({ Active: true }).sort({ SellerID: 1 }).lean();
 }
 
-async function createSeller(input) {
-  const Name = text(input.Name);
-  if (!Name) throw new AppError(400, 'Seller name is required');
+async function createSeller(input = {}) {
   return withTransaction(async (session) => {
+    if (!text(input.name)) throw new AppError(400, 'Seller name required.');
     const SellerID = await nextId('SEL', session);
-    const seller = await new Seller({
+    await new Seller({
       SellerID,
-      Name,
-      Phone: text(input.Phone),
-      Email: text(input.Email),
-      Address: text(input.Address),
-      GSTIN: text(input.GSTIN),
-      KYCStatus: text(input.KYCStatus) || 'Pending',
+      Name: text(input.name),
+      Phone: text(input.phone),
+      Email: text(input.email),
+      Address: text(input.address),
+      GSTIN: text(input.gstin),
+      KYCStatus: text(input.kycStatus) || 'Pending',
       JoinDate: new Date(),
+      TotalPayable: 0,
+      TotalSettled: 0,
+      Active: true,
     }).save({ session });
-    await audit.log('CREATE_SELLER', 'Seller', SellerID, { Name }, session);
-    return seller.toObject();
+    await audit.log('SELLER_ADD', 'Seller', SellerID, { name: text(input.name) }, session);
+    return SellerID;
   });
 }
 
-async function updateSeller(sellerId, input) {
+async function updateSeller(sellerId, input = {}) {
   return withTransaction(async (session) => {
     const seller = await Seller.findOne({ SellerID: sellerId }).session(session);
-    if (!seller) throw new AppError(404, 'Seller not found');
-    const changes = {};
-    EDITABLE.forEach((key) => {
-      if (input[key] !== undefined) changes[key] = text(input[key]);
+    if (!seller) throw new AppError(404, 'Seller not found.');
+    Object.assign(seller, {
+      Name: text(input.name),
+      Phone: text(input.phone),
+      Email: text(input.email),
+      Address: text(input.address),
+      GSTIN: text(input.gstin),
+      KYCStatus: text(input.kycStatus) || 'Pending',
     });
-    if ('Name' in changes && !changes.Name) throw new AppError(400, 'Seller name is required');
-    Object.assign(seller, changes);
     await seller.save({ session });
-    // Keep the copied seller name on products in step.
-    if (changes.Name) await Asset.updateMany({ SellerID: sellerId }, { $set: { SellerName: changes.Name } }, { session });
-    await audit.log('UPDATE_SELLER', 'Seller', sellerId, changes, session);
-    return seller.toObject();
+    await audit.log('SELLER_UPDATE', 'Seller', sellerId, {}, session);
+    return true;
   });
 }
 
-async function archiveSeller(sellerId) {
+async function deleteSeller(sellerId) {
   return withTransaction(async (session) => {
     const seller = await Seller.findOne({ SellerID: sellerId }).session(session);
-    if (!seller) throw new AppError(404, 'Seller not found');
-    if (!seller.Active) throw new AppError(400, 'Seller is already archived');
-    const linked = await Asset.countDocuments({ SellerID: sellerId }).session(session);
-    if (linked > 0) throw new AppError(400, `Cannot archive: seller has ${linked} linked product(s) and their sales.`);
+    if (!seller) throw new AppError(404, 'Seller not found.');
+    const hasAssets = await Asset.exists({ SellerID: sellerId, Status: { $ne: 'Archived' } }).session(session);
+    const assetIds = await Asset.distinct('AssetID', { SellerID: sellerId }).session(session);
+    const hasSales = assetIds.length ? await Sale.exists({ AssetID: { $in: assetIds } }).session(session) : null;
+    if (hasAssets || hasSales) throw new AppError(400, 'Seller has linked history. Archive seller only after all active stock is cleared.');
     seller.Active = false;
     seller.ArchivedAt = new Date();
     await seller.save({ session });
-    await audit.log('ARCHIVE_SELLER', 'Seller', sellerId, { Name: seller.Name }, session);
-    return seller.toObject();
+    await audit.log('SELLER_ARCHIVE', 'Seller', sellerId, {}, session);
+    return true;
   });
 }
 
-module.exports = { listSellers, createSeller, updateSeller, archiveSeller };
+module.exports = { listSellers, createSeller, updateSeller, deleteSeller };

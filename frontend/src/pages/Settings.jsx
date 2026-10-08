@@ -1,65 +1,50 @@
 import { useEffect, useState } from 'react';
-import { getSettings, updateSettings } from '../api/system.api';
-import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import FormField from '../components/common/FormField';
-import Message from '../components/common/Message';
+import { Save } from 'lucide-react';
+import { getSettings, updateSettings } from '../api/erp.api';
+import { Alert, Field, PageHeader, Panel } from '../components/common/ui';
+import { useModal } from '../components/common/Modal';
 
 export default function Settings() {
-  const settings = useFetch(getSettings);
-  const { message, setMessage, run } = useAction();
-  const [form, setForm] = useState(null);
+  const [s, setS] = useState({ capacity: '', footprint: '', storage: '', commission: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const modal = useModal();
+  const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
 
   useEffect(() => {
-    const s = settings.data;
-    if (!s) return;
-    setForm({
-      WarehouseCapacitySqFt: s.WarehouseCapacitySqFt,
-      RentedFootprintSqFt: s.RentedFootprintSqFt,
-      StorageRatePerSqFtPerMonth: s.StorageRatePerSqFtPerMonth,
-      CommissionPercent: Math.round(s.CommissionTier1Rate * 10000) / 100,
-      RequireReservePriceApproval: s.RequireReservePriceApproval,
-      EnforceWarehouseCapacity: s.EnforceWarehouseCapacity,
-      MaxPhotoMB: s.MaxPhotoMB,
-      MaxVideoMB: s.MaxVideoMB,
-    });
-  }, [settings.data]);
+    getSettings().then((x) => setS({
+      capacity: x.WarehouseCapacitySqFt || '',
+      footprint: x.RentedFootprintSqFt || '',
+      storage: x.StorageRatePerSqFtPerMonth || '',
+      commission: Math.round((x.CommissionTier3Rate || 0.1) * 100 * 1000) / 1000,
+    })).catch((e) => setError(e.message));
+  }, []);
 
-  if (!form) return <div className="page"><h1>Settings</h1><p className="muted">Loading…</p></div>;
-
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
-
-  const save = async (e) => {
+  // One commission rate is written to all three tiers, as in the old system.
+  const save = (e) => {
     e.preventDefault();
-    const { CommissionPercent, ...rest } = form;
-    const rate = Number(CommissionPercent) / 100;
-    // As in the old system, one commission % is applied to all three tiers.
-    const payload = { ...rest, CommissionTier1Rate: rate, CommissionTier2Rate: rate, CommissionTier3Rate: rate };
-    const saved = await run(() => updateSettings(payload), 'Settings saved');
-    if (saved) settings.setData(saved);
+    const rate = Number(s.commission) / 100;
+    setBusy(true);
+    updateSettings({
+      WarehouseCapacitySqFt: s.capacity, RentedFootprintSqFt: s.footprint, StorageRatePerSqFtPerMonth: s.storage,
+      CommissionTier1Rate: rate, CommissionTier2Rate: rate, CommissionTier3Rate: rate,
+    }).then(() => modal.alert('Settings saved', { title: 'Saved' })).catch((err) => modal.alert(`Error: ${err.message}`)).finally(() => setBusy(false));
   };
 
   return (
-    <div className="page">
-      <div className="page-header"><h1>Settings</h1><span className="muted small">ERP version {settings.data?.ERPVersion}</span></div>
-      <Message message={message || (settings.error && { type: 'error', text: settings.error })} onClose={() => setMessage(null)} />
-      <form className="card form-grid" onSubmit={save}>
-        <FormField label="Warehouse capacity (sq.ft)"><input type="number" min="0" step="any" value={form.WarehouseCapacitySqFt} onChange={set('WarehouseCapacitySqFt')} /></FormField>
-        <FormField label="Rented footprint (sq.ft)"><input type="number" min="0" step="any" value={form.RentedFootprintSqFt} onChange={set('RentedFootprintSqFt')} /></FormField>
-        <FormField label="Storage rate (₹ per sq.ft per month)"><input type="number" min="0" step="any" value={form.StorageRatePerSqFtPerMonth} onChange={set('StorageRatePerSqFtPerMonth')} /></FormField>
-        <FormField label="Commission (%)" hint="Applied to all sale amounts"><input type="number" min="0" max="100" step="any" value={form.CommissionPercent} onChange={set('CommissionPercent')} /></FormField>
-        <FormField label="Max photo size (MB)"><input type="number" min="1" step="1" value={form.MaxPhotoMB} onChange={set('MaxPhotoMB')} /></FormField>
-        <FormField label="Max video size (MB)"><input type="number" min="1" step="1" value={form.MaxVideoMB} onChange={set('MaxVideoMB')} /></FormField>
-        <label className="check field-wide">
-          <input type="checkbox" checked={form.RequireReservePriceApproval} onChange={set('RequireReservePriceApproval')} />
-          Ask for manager approval when selling below reserve price
-        </label>
-        <label className="check field-wide">
-          <input type="checkbox" checked={form.EnforceWarehouseCapacity} onChange={set('EnforceWarehouseCapacity')} />
-          Block new stock when the warehouse is full
-        </label>
-        <div className="form-actions"><button className="btn btn-primary">Save settings</button></div>
+    <>
+      <PageHeader title="Settings" subtitle="Warehouse size, storage rate and commission." />
+      <Alert msg={error && { err: true, text: error }} />
+      <form noValidate onSubmit={save}>
+        <Panel title="Warehouse" footer={<button className="btn btn-primary" disabled={busy}><Save size={16} />{busy ? 'Saving...' : 'Save Settings'}</button>}>
+          <div className="form-grid">
+            <Field label="Warehouse Effective Capacity (sq.ft)"><input type="number" inputMode="decimal" value={s.capacity} onChange={set('capacity')} /></Field>
+            <Field label="Rented Footprint (sq.ft)"><input type="number" inputMode="decimal" value={s.footprint} onChange={set('footprint')} /></Field>
+            <Field label="Storage Rate (₹/sq.ft/month)"><input type="number" inputMode="decimal" value={s.storage} onChange={set('storage')} /></Field>
+            <Field label="Commission Rate (%)"><input type="number" step="0.1" inputMode="decimal" value={s.commission} onChange={set('commission')} /></Field>
+          </div>
+        </Panel>
       </form>
-    </div>
+    </>
   );
 }

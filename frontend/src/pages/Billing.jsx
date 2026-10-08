@@ -1,161 +1,143 @@
-import { useState } from 'react';
-import { listAssets } from '../api/assets.api';
-import { listBuyers } from '../api/buyers.api';
-import { createSale, previewSale } from '../api/sales.api';
-import useFetch from '../hooks/useFetch';
-import FormField from '../components/common/FormField';
-import Message from '../components/common/Message';
+import { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { createSale, getAssets, getBuyers, previewBilling } from '../api/erp.api';
+import { Alert, Field, PageHeader, Panel } from '../components/common/ui';
 import { useModal } from '../components/common/Modal';
-import { PAYMENT_MODES } from '../utils/constants';
-import { formatINR, formatPercent } from '../utils/format';
+import { fmt } from '../utils/format';
 
-const EMPTY = {
-  AssetID: '', Quantity: '1', UnitSalePrice: '', BuyerID: '', ReceivedAmount: '0', PaymentMode: 'Cash',
-  MarketingCharge: '0', RepairCharge: '0', LogisticsCharge: '0', Notes: '',
-};
+const EMPTY = { assetID: '', buyerID: '', qty: '1', price: '', received: '', marketing: '0', repair: '0', logistics: '0' };
 
 export default function Billing() {
-  const lists = useFetch(async () => {
-    const [assets, buyers] = await Promise.all([listAssets(), listBuyers()]);
-    return { assets: assets.filter((a) => ['In Stock', 'Listed'].includes(a.Status) && a.QuantityAvailable > 0), buyers };
-  });
-  const modal = useModal();
-  const [form, setForm] = useState(EMPTY);
+  const [f, setF] = useState(EMPTY);
+  const [assets, setAssets] = useState([]);
+  const [buyers, setBuyers] = useState([]);
   const [preview, setPreview] = useState(null);
-  const [message, setMessage] = useState(null);
+  const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const modal = useModal();
+  const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
 
-  const assets = lists.data?.assets || [];
-  const selected = assets.find((a) => a.AssetID === form.AssetID);
+  const loadForm = useCallback(() => {
+    getAssets().then((rows) => setAssets(rows.filter((a) => ['In Stock', 'Listed'].includes(a.Status) && Number(a.QuantityAvailable) > 0)))
+      .catch((e) => modal.alert(`Error: ${e.message}`));
+    getBuyers().then(setBuyers).catch((e) => modal.alert(`Error: ${e.message}`));
+  }, [modal]);
 
-  const set = (key) => (e) => {
-    const value = e.target.value;
-    setPreview(null);
-    setForm((f) => {
-      const next = { ...f, [key]: value };
-      if (key === 'AssetID') {
-        const a = assets.find((x) => x.AssetID === value);
-        next.UnitSalePrice = a?.ListedPrice ? String(a.ListedPrice) : '';
-      }
-      return next;
-    });
-  };
+  useEffect(() => { loadForm(); }, [loadForm]);
 
-  const doPreview = async () => {
-    setMessage(null);
-    try {
-      setPreview(await previewSale(form));
-    } catch (e) {
-      setMessage({ type: 'error', text: e.message });
-    }
-  };
+  // Live preview: quantity x price, commission and seller share.
+  useEffect(() => {
+    const qty = Number(f.qty);
+    const unitPrice = Number(f.price);
+    if (!f.assetID || !qty || !unitPrice) return undefined;
+    let alive = true;
+    const t = setTimeout(() => {
+      previewBilling(f.assetID, qty, unitPrice)
+        .then((p) => alive && setPreview(p))
+        .catch((e) => alive && setPreview({ error: e.message }));
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [f.assetID, f.qty, f.price]);
+
+  const showPreview = Boolean(f.assetID && Number(f.qty) && Number(f.price)) && preview;
+  const selected = assets.find((a) => a.AssetID === f.assetID);
 
   const submit = async (e) => {
     e.preventDefault();
+    const qty = Math.floor(Number(f.qty));
+    const unitPrice = Number(f.price);
+    if (!f.assetID || !qty || qty < 1 || !unitPrice || unitPrice <= 0) {
+      return setMsg({ err: true, text: 'Select product, quantity and unit sale price' });
+    }
+    if (selected && qty > Number(selected.QuantityAvailable)) {
+      return setMsg({ err: true, text: `Only ${selected.QuantityAvailable} unit(s) available` });
+    }
+    const total = qty * unitPrice;
+    const sale = {
+      assetID: f.assetID, quantity: qty, unitSalePrice: unitPrice, buyerID: f.buyerID,
+      receivedAmount: f.received || 0, marketingCharge: f.marketing || 0, repairCharge: f.repair || 0, logisticsCharge: f.logistics || 0,
+      managerOverride: false,
+    };
+    if (selected && Number(selected.ReservePrice) > 0 && unitPrice < Number(selected.ReservePrice)) {
+      const ok = await modal.confirm(`Unit price ${fmt(unitPrice)} is below reserve ${fmt(selected.ReservePrice)}. Manager override?`, { title: 'Below reserve price', confirmText: 'Override' });
+      if (!ok) return;
+      sale.managerOverride = true;
+    }
+    if (Number(sale.receivedAmount) > total) {
+      return setMsg({ err: true, text: `Received/token amount cannot exceed total sale ${fmt(total)}` });
+    }
     setBusy(true);
-    setMessage(null);
     try {
-      let sale;
-      try {
-        sale = await createSale(form);
-      } catch (err) {
-        if (err.code !== 'RESERVE_OVERRIDE_REQUIRED') throw err;
-        const approved = await modal.confirm(`${err.message} Approve this sale below reserve price?`, { title: 'Manager approval', confirmText: 'Approve & sell' });
-        if (!approved) return;
-        sale = await createSale({ ...form, managerOverride: true });
-      }
-      setMessage({ type: 'success', text: `Sale ${sale.SaleID} created · ${formatINR(sale.SalePrice)} · ${sale.PaymentStatus} · ${sale.OrderStatus}` });
-      setForm(EMPTY);
+      const id = await createSale(sale);
+      setMsg({ text: `Sale ${id} recorded — Qty ${qty}, Total ${fmt(total)}. Partial/unpaid = Reserved; fully paid = Ready for Pickup.` });
+      setF((cur) => ({ ...cur, assetID: '', qty: '1', price: '', received: '' }));
       setPreview(null);
-      lists.reload({ silent: true });
+      loadForm();
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      setMsg({ err: true, text: `Error: ${err.message}` });
     } finally {
       setBusy(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
   return (
-    <div className="page">
-      <div className="page-header"><h1>Sell / Billing</h1></div>
-      <Message message={message || (lists.error && { type: 'error', text: lists.error })} onClose={() => setMessage(null)} />
+    <>
+      <PageHeader title="Sell / Billing" subtitle="Create a sale. Units are reserved until the buyer collects them." />
+      <Alert msg={msg} />
+      <form noValidate onSubmit={submit} className="grid-2" style={{ alignItems: 'start' }}>
+        <div>
+          <Panel title="Product and buyer">
+            <div className="form-grid">
+              <Field label="Asset" required span>
+                <select value={f.assetID} onChange={set('assetID')}>
+                  <option value="">-- select product --</option>
+                  {assets.map((a) => (
+                    <option key={a.AssetID} value={a.AssetID}>{a.AssetID} — {a.ItemName} | Available {a.QuantityAvailable} | {fmt(a.ListedPrice)}/unit</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Buyer" span>
+                <select value={f.buyerID} onChange={set('buyerID')}>
+                  <option value="">-- walk-in / none --</option>
+                  {buyers.map((b) => <option key={b.BuyerID} value={b.BuyerID}>{b.Name} — {b.Phone || 'no phone'}</option>)}
+                </select>
+              </Field>
+              <Field label="Quantity" required><input type="number" min="1" step="1" inputMode="numeric" value={f.qty} onChange={set('qty')} /></Field>
+              <Field label="Unit Sale Price (₹)" required><input type="number" min="0.01" inputMode="decimal" value={f.price} onChange={set('price')} /></Field>
+              <Field label="Received Now / Token (₹)" span><input type="number" min="0" inputMode="decimal" value={f.received} onChange={set('received')} /></Field>
+            </div>
+          </Panel>
+          <Panel title="Charges" description="Added to HR revenue and taken from the seller's share.">
+            <div className="form-grid">
+              <Field label="Marketing Charge (₹)"><input type="number" inputMode="decimal" value={f.marketing} onChange={set('marketing')} /></Field>
+              <Field label="Repair Charge (₹)"><input type="number" inputMode="decimal" value={f.repair} onChange={set('repair')} /></Field>
+              <Field label="Logistics Charge (₹)"><input type="number" inputMode="decimal" value={f.logistics} onChange={set('logistics')} /></Field>
+            </div>
+          </Panel>
+        </div>
 
-      <div className="grid-2">
-        <form className="card form-grid one-col" onSubmit={submit}>
-          <FormField label="Product" required>
-            <select value={form.AssetID} onChange={set('AssetID')} required>
-              <option value="">— Select product —</option>
-              {assets.map((a) => (
-                <option key={a.AssetID} value={a.AssetID}>
-                  {a.AssetID} · {a.ItemName} ({a.QuantityAvailable} available, {formatINR(a.ListedPrice)})
-                </option>
-              ))}
-            </select>
-          </FormField>
-          {selected && (
-            <p className="muted small">
-              Seller: {selected.SellerName || '—'} · Reserve price: {formatINR(selected.ReservePrice)} · Listed: {formatINR(selected.ListedPrice)}
-            </p>
-          )}
-          <div className="row-2">
-            <FormField label="Quantity" required>
-              <input type="number" min="1" max={selected?.QuantityAvailable} step="1" value={form.Quantity} onChange={set('Quantity')} required />
-            </FormField>
-            <FormField label="Unit sale price (₹)" required>
-              <input type="number" min="0" step="any" value={form.UnitSalePrice} onChange={set('UnitSalePrice')} required />
-            </FormField>
-          </div>
-          <FormField label="Buyer">
-            <select value={form.BuyerID} onChange={set('BuyerID')}>
-              <option value="">Walk-in</option>
-              {lists.data?.buyers.map((b) => <option key={b.BuyerID} value={b.BuyerID}>{b.BuyerID} · {b.Name}</option>)}
-            </select>
-          </FormField>
-          <div className="row-2">
-            <FormField label="Amount received now (₹)"><input type="number" min="0" step="any" value={form.ReceivedAmount} onChange={set('ReceivedAmount')} /></FormField>
-            <FormField label="Payment mode">
-              <select value={form.PaymentMode} onChange={set('PaymentMode')}>{PAYMENT_MODES.map((m) => <option key={m}>{m}</option>)}</select>
-            </FormField>
-          </div>
-          <div className="row-3">
-            <FormField label="Marketing (₹)"><input type="number" min="0" step="any" value={form.MarketingCharge} onChange={set('MarketingCharge')} /></FormField>
-            <FormField label="Repair (₹)"><input type="number" min="0" step="any" value={form.RepairCharge} onChange={set('RepairCharge')} /></FormField>
-            <FormField label="Logistics (₹)"><input type="number" min="0" step="any" value={form.LogisticsCharge} onChange={set('LogisticsCharge')} /></FormField>
-          </div>
-          <FormField label="Notes"><textarea rows={2} value={form.Notes} onChange={set('Notes')} /></FormField>
-          <div className="form-actions">
-            <button type="button" className="btn btn-secondary" onClick={doPreview} disabled={!form.AssetID}>Preview</button>
-            <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Create sale'}</button>
-          </div>
-        </form>
-
-        <section className="card">
-          <h2>Preview</h2>
-          {!preview ? <p className="muted">Fill the form and press Preview to see the money split.</p> : (
-            <>
-              {preview.BelowReserve && (
-                <div className="message message-warning">
-                  Price is below the reserve price ({formatINR(preview.ReservePrice)}).{preview.NeedsOverride ? ' Manager approval will be asked.' : ''}
+        <div style={{ position: 'sticky', top: 72 }}>
+          <Panel title="Bill summary"
+            footer={<button className="btn btn-primary" disabled={busy} style={{ width: '100%' }}><CheckCircle2 size={16} />{busy ? 'Recording...' : 'Confirm Sale'}</button>}>
+            {!showPreview && <p className="muted" style={{ margin: 0 }}>Choose a product, quantity and price to see the bill.</p>}
+            {showPreview && preview.error && <div className="alert alert-error" style={{ margin: 0 }}><AlertTriangle size={18} />{preview.error}</div>}
+            {showPreview && !preview.error && (
+              <>
+                <div className="summary">
+                  <div><div className="k">{preview.quantity} × {fmt(preview.unitSalePrice)}</div><div className="v accent">{fmt(preview.totalSalePrice)}</div></div>
+                  <div><div className="k">Commission ({(preview.commission.rate * 100).toFixed(0)}%)</div><div className="v">{fmt(preview.commission.amount)}</div></div>
+                  <div><div className="k">Seller gets approx</div><div className="v">{fmt(Number(preview.totalSalePrice) - Number(preview.commission.amount))}</div></div>
                 </div>
-              )}
-              <table className="table compact">
-                <tbody>
-                  <tr><td>{preview.Quantity} × {formatINR(preview.UnitSalePrice)}</td><td className="num"><strong>{formatINR(preview.SalePrice)}</strong></td></tr>
-                  <tr><td>Commission ({formatPercent(preview.CommissionRate)})</td><td className="num">{formatINR(preview.CommissionAmount)}</td></tr>
-                  <tr><td>Marketing</td><td className="num">{formatINR(preview.MarketingCharge)}</td></tr>
-                  <tr><td>Repair</td><td className="num">{formatINR(preview.RepairCharge)}</td></tr>
-                  <tr><td>Logistics</td><td className="num">{formatINR(preview.LogisticsCharge)}</td></tr>
-                  <tr className="total"><td>HR gross revenue</td><td className="num">{formatINR(preview.HRGrossRevenue)}</td></tr>
-                  <tr className="total"><td>Seller payable</td><td className="num">{formatINR(preview.SellerPayable)}</td></tr>
-                  <tr><td>Received now</td><td className="num">{formatINR(preview.ReceivedAmount)}</td></tr>
-                  <tr><td>Balance due</td><td className="num">{formatINR(preview.Balance)}</td></tr>
-                  <tr><td>Payment / order status</td><td className="num">{preview.PaymentStatus} · {preview.OrderStatus}</td></tr>
-                </tbody>
-              </table>
-            </>
-          )}
-        </section>
-      </div>
-    </div>
+                {preview.belowReserve && (
+                  <div className="alert alert-error" style={{ margin: '12px 0 0' }}><AlertTriangle size={18} />Unit price below reserve {fmt(preview.asset.ReservePrice)}</div>
+                )}
+                <p className="field-hint" style={{ margin: '12px 0 0' }}>Other charges apply; storage is billed separately.</p>
+              </>
+            )}
+          </Panel>
+        </div>
+      </form>
+    </>
   );
 }

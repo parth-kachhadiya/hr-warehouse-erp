@@ -1,44 +1,37 @@
-// Seller settlements: paying sellers what they are owed.
+// Seller settlements (same rules as paySeller / getSettlements in the old script).
 const { Seller, Settlement } = require('../models');
 const { nextId } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
-const { toNumber, round2 } = require('../utils/number');
+const { num, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
 const audit = require('./audit.service');
 
-const text = (v) => String(v ?? '').trim();
-
 async function listSettlements() {
-  return Settlement.find().sort({ SettlementID: -1 }).lean();
+  return Settlement.find().sort({ SettlementID: 1 }).lean();
 }
 
-// paySeller
-async function paySeller(input) {
-  const amount = round2(toNumber(input.Amount, NaN));
-  if (!Number.isFinite(amount) || amount <= 0) throw new AppError(400, 'Amount must be more than 0');
+async function paySeller(p = {}) {
   return withTransaction(async (session) => {
-    const seller = await Seller.findOne({ SellerID: text(input.SellerID) }).session(session);
-    if (!seller) throw new AppError(404, 'Seller not found');
-    if (amount > round2(seller.TotalPayable)) throw new AppError(400, `Amount is more than the payable balance (₹${round2(seller.TotalPayable)})`);
-
-    seller.TotalPayable = round2(seller.TotalPayable - amount);
-    seller.TotalSettled = round2(seller.TotalSettled + amount);
+    const seller = await Seller.findOne({ SellerID: p.sellerID }).session(session);
+    if (!seller) throw new AppError(404, 'Seller not found.');
+    const payable = Number(seller.TotalPayable) || 0;
+    const amount = num(p.amount, 'Settlement amount', { positive: true });
+    if (amount > payable) throw new AppError(400, `Amount exceeds payable balance ${payable}.`);
+    seller.TotalPayable = payable - amount;
+    seller.TotalSettled = (Number(seller.TotalSettled) || 0) + amount;
     await seller.save({ session });
-
-    const SettlementID = await nextId('STL', session);
-    const settlement = await new Settlement({
-      SettlementID,
+    await new Settlement({
+      SettlementID: await nextId('STL', session),
       Date: new Date(),
-      SellerID: seller.SellerID,
+      SellerID: p.sellerID,
       SellerName: seller.Name,
       Amount: amount,
-      Mode: text(input.Mode) || 'Bank Transfer',
-      Notes: text(input.Notes),
+      Mode: text(p.mode) || 'Bank Transfer',
+      Notes: text(p.notes),
       Status: 'Active',
     }).save({ session });
-
-    await audit.log('PAY_SELLER', 'Settlement', SettlementID, { SellerID: seller.SellerID, Amount: amount }, session);
-    return { settlement: settlement.toObject(), seller: seller.toObject() };
+    await audit.log('SELLER_SETTLEMENT', 'Seller', p.sellerID, { amount }, session);
+    return true;
   });
 }
 

@@ -1,139 +1,83 @@
-import { useState } from 'react';
-import { adjustQuantity, archiveAsset, changeStatus, listAssets, updateAsset } from '../api/assets.api';
-import { getSettings, listCategories, listCustomFields } from '../api/system.api';
+import { Archive, Image, PencilLine, Video } from 'lucide-react';
+import { adjustAssetQuantity, deleteAsset, getAssets, setAssetStatus } from '../api/erp.api';
 import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import DataTable from '../components/common/DataTable';
-import StatusBadge from '../components/common/StatusBadge';
-import Message from '../components/common/Message';
-import Modal, { useModal } from '../components/common/Modal';
-import MediaUploader from '../components/common/MediaUploader';
-import { ASSET_STATUSES, CONDITION_GRADES, MANUAL_ASSET_STATUSES } from '../utils/constants';
-import { formatDate, formatINR, formatNumber } from '../utils/format';
+import { Alert, Badge, DataTable, PageHeader, Panel } from '../components/common/ui';
+import { useModal } from '../components/common/Modal';
+import { fmt, safeUrl } from '../utils/format';
+import { STOCK_STATUS_OPTIONS } from '../utils/constants';
 
 export default function Stock() {
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
-  const assets = useFetch(() => listAssets({ search, status }), [search, status]);
-  const lookups = useFetch(async () => {
-    const [categories, fields, settings] = await Promise.all([listCategories(), listCustomFields(), getSettings()]);
-    return { categories, fields, settings };
-  });
-  const { message, setMessage, run } = useAction();
+  const { data, reload, error } = useFetch(getAssets);
   const modal = useModal();
-  const [mediaAsset, setMediaAsset] = useState(null);
+  const onErr = (e) => modal.alert(`Error: ${e.message}`);
 
-  const refresh = () => assets.reload({ silent: true });
-
-  const edit = async (a) => {
-    const fields = [
-      { name: 'ItemName', label: 'Item name', defaultValue: a.ItemName },
-      { name: 'Category', label: 'Category', type: 'select', required: false, defaultValue: a.Category,
-        options: [{ value: '', label: '— None —' }, ...(lookups.data?.categories || []).map((c) => c.Name)] },
-      { name: 'ConditionGrade', label: 'Condition grade', type: 'select', options: CONDITION_GRADES, defaultValue: a.ConditionGrade },
-      { name: 'ReservePrice', label: 'Reserve price per unit (₹)', type: 'number', required: false, defaultValue: a.ReservePrice },
-      { name: 'ListedPrice', label: 'Listed price per unit (₹)', type: 'number', required: false, defaultValue: a.ListedPrice },
-      ...(lookups.data?.fields || []).map((f) => ({ name: `cf:${f.FieldName}`, label: f.FieldName, required: false, defaultValue: a.CustomFieldsData?.[f.FieldName] ?? '' })),
-      { name: 'Notes', label: 'Notes', type: 'textarea', required: false, defaultValue: a.Notes },
-    ];
-    const values = await modal.form({ title: `Edit ${a.AssetID}`, fields, confirmText: 'Save' });
-    if (!values) return;
-    const CustomFieldsData = { ...(a.CustomFieldsData || {}) };
-    const data = {};
-    Object.entries(values).forEach(([k, v]) => {
-      if (k.startsWith('cf:')) CustomFieldsData[k.slice(3)] = v;
-      else data[k] = v;
-    });
-    if (await run(() => updateAsset(a.AssetID, { ...data, CustomFieldsData }), `${a.AssetID} updated`)) refresh();
-  };
-
-  const adjust = async (a) => {
-    const min = a.QuantityReserved + a.QuantityDelivered + a.QuantityRemoved;
-    const values = await modal.form({
-      title: `Adjust quantity · ${a.AssetID}`,
-      message: `Current total received: ${a.QuantityReceived}. It cannot go below ${min} (reserved + delivered + removed).`,
-      fields: [
-        { name: 'newQuantity', label: 'New total quantity', type: 'number', min, step: 1, defaultValue: a.QuantityReceived },
-        { name: 'reason', label: 'Reason', type: 'textarea' },
-      ],
-      confirmText: 'Adjust',
-    });
-    if (!values) return;
-    if (await run(() => adjustQuantity(a.AssetID, Number(values.newQuantity), values.reason), `${a.AssetID} quantity changed`)) refresh();
+  const adjustQty = async (a) => {
+    const next = await modal.prompt(`New TOTAL received quantity for ${a.AssetID}:`, { title: 'Adjust quantity', type: 'number', defaultValue: a.QuantityReceived || 0, min: 1, step: 1 });
+    if (next === null || next === '') return;
+    const reason = await modal.prompt('Reason for quantity adjustment:', { title: 'Adjust quantity' });
+    if (!reason) return;
+    adjustAssetQuantity(a.AssetID, next, reason).then(reload).catch(onErr);
   };
 
   const archive = async (a) => {
-    const reason = await modal.prompt(
-      `Archive ${a.AssetID} (${a.ItemName})? ${a.QuantityAvailable} available unit(s) will be marked as removed. Enter a reason:`,
-      { title: 'Archive product', confirmText: 'Archive', danger: true }
-    );
-    if (reason === null) return;
-    if (await run(() => archiveAsset(a.AssetID, reason), `${a.AssetID} archived`)) refresh();
+    if (!(await modal.confirm('Archive remaining available units? Reserved units cannot be archived.', { title: 'Archive product', confirmText: 'Archive', danger: true }))) return;
+    deleteAsset(a.AssetID).then(reload).catch(onErr);
   };
 
-  const setAssetStatus = async (a, value) => {
-    if (await run(() => changeStatus(a.AssetID, value), `${a.AssetID} is now ${value}`)) refresh();
-  };
+  const changeStatus = (a, status) => setAssetStatus(a.AssetID, status).then(reload).catch((e) => { modal.alert(e.message); reload(); });
 
-  const locked = (a) => ['Sold', 'Archived'].includes(a.Status);
-
-  const columns = [
-    { key: 'AssetID', label: 'ID' },
-    { key: 'ItemName', label: 'Item', render: (a) => (<><strong>{a.ItemName}</strong><div className="muted small">{a.Category}</div></>) },
-    { key: 'SellerName', label: 'Seller', render: (a) => (a.SellerID ? `${a.SellerID} · ${a.SellerName}` : '—') },
-    { key: 'ConditionGrade', label: 'Grade' },
-    { key: 'QuantityReceived', label: 'Recv', align: 'right' },
-    { key: 'QuantityAvailable', label: 'Avail', align: 'right' },
-    { key: 'QuantityReserved', label: 'Res', align: 'right' },
-    { key: 'QuantityDelivered', label: 'Deliv', align: 'right' },
-    { key: 'QuantityRemoved', label: 'Rem', align: 'right' },
-    { key: 'SpaceSqFt', label: 'Sq.ft/unit', align: 'right', render: (a) => formatNumber(a.SpaceSqFt) },
-    { key: 'ListedPrice', label: 'Listed', align: 'right', render: (a) => formatINR(a.ListedPrice) },
-    { key: 'DateReceived', label: 'Received', render: (a) => formatDate(a.DateReceived) },
-    {
-      key: 'Status', label: 'Status',
-      render: (a) => (locked(a) ? <StatusBadge status={a.Status} /> : (
-        <select value={a.Status} onChange={(e) => setAssetStatus(a, e.target.value)} className="inline-select">
-          {MANUAL_ASSET_STATUSES.map((s) => <option key={s}>{s}</option>)}
-        </select>
-      )),
-    },
-    {
-      key: 'actions', label: 'Actions',
-      render: (a) => (
-        <div className="actions">
-          {a.Status !== 'Sold' && <button className="btn btn-small" onClick={() => edit(a)}>Edit</button>}
-          {!locked(a) && <button className="btn btn-small" onClick={() => adjust(a)}>Adjust Qty</button>}
-          <button className="btn btn-small" onClick={() => setMediaAsset(a)}>Media{a.PhotoLinks?.length ? ` (${a.PhotoLinks.length})` : ''}</button>
-          {a.Status !== 'Archived' && a.Status !== 'Sold' && <button className="btn btn-small btn-danger-outline" onClick={() => archive(a)}>Archive</button>}
-        </div>
-      ),
-    },
-  ];
-
+  const rows = data || [];
   return (
-    <div className="page">
-      <div className="page-header"><h1>Stock</h1></div>
-      <Message message={message || (assets.error && { type: 'error', text: assets.error })} onClose={() => setMessage(null)} />
-      <div className="toolbar">
-        <input placeholder="Search ID, item, seller, category…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          {ASSET_STATUSES.map((s) => <option key={s}>{s}</option>)}
-        </select>
-      </div>
-      <DataTable rowKey="AssetID" rows={assets.data} loading={assets.loading} columns={columns} empty="No products found." />
-
-      <Modal open={Boolean(mediaAsset)} title={mediaAsset ? `Media · ${mediaAsset.AssetID} ${mediaAsset.ItemName}` : ''} onClose={() => setMediaAsset(null)} wide>
-        {mediaAsset && (
-          <MediaUploader
-            asset={mediaAsset}
-            maxPhotoMB={lookups.data?.settings.MaxPhotoMB}
-            maxVideoMB={lookups.data?.settings.MaxVideoMB}
-            onUpdated={(updated) => { setMediaAsset(updated); refresh(); }}
-          />
-        )}
-      </Modal>
-    </div>
+    <>
+      <PageHeader title="Stock" subtitle="Everything in the warehouse, with quantities and space used." />
+      <Alert msg={error && { err: true, text: error }} />
+      <Panel flush>
+        <DataTable rows={data ? rows.length : -1} empty="No stock"
+          head={['ID', 'Item', 'Category', 'Grade', 'Received', 'Available', 'Reserved', 'Delivered', 'Space/Unit', 'Occupied', 'Listed/Unit ₹', 'Status', 'Change Status', 'Media', 'Action']}>
+          {rows.map((a) => {
+            const occupied = (Number(a.SpaceSqFt) || 0) * ((Number(a.QuantityAvailable) || 0) + (Number(a.QuantityReserved) || 0));
+            return (
+              <tr key={a.AssetID}>
+                <td className="id-cell">{a.AssetID}</td>
+                <td className="item-cell">{a.ItemName}</td>
+                <td>{a.Category}</td>
+                <td>{a.ConditionGrade}</td>
+                <td>{a.QuantityReceived || 0}</td>
+                <td className="strong">{a.QuantityAvailable || 0}</td>
+                <td>{a.QuantityReserved || 0}</td>
+                <td>{a.QuantityDelivered || 0}</td>
+                <td>{a.SpaceSqFt} sqft</td>
+                <td>{occupied.toLocaleString('en-IN')} sqft</td>
+                <td>{fmt(a.ListedPrice)}</td>
+                <td><Badge>{a.Status}</Badge></td>
+                <td>
+                  {['Sold', 'Archived'].includes(a.Status) ? <span className="muted">Locked</span> : (
+                    <select className="input" value={STOCK_STATUS_OPTIONS.includes(a.Status) ? a.Status : ''} onChange={(e) => changeStatus(a, e.target.value)}>
+                      {!STOCK_STATUS_OPTIONS.includes(a.Status) && <option value="" disabled>{a.Status}</option>}
+                      {STOCK_STATUS_OPTIONS.map((st) => <option key={st}>{st}</option>)}
+                    </select>
+                  )}
+                </td>
+                <td>
+                  <div className="media-links">
+                    {(a.PhotoLinks || []).map((l, i) => <a key={l} href={safeUrl(l)} target="_blank" rel="noopener noreferrer"><Image size={12} />P{i + 1}</a>)}
+                    {a.VideoLink && <a href={safeUrl(a.VideoLink)} target="_blank" rel="noopener noreferrer"><Video size={12} />Video</a>}
+                    {!(a.PhotoLinks || []).length && !a.VideoLink && <span className="muted">-</span>}
+                  </div>
+                </td>
+                <td>
+                  {a.Status === 'Sold' ? <span className="muted">Completed</span> : (
+                    <div className="row-actions">
+                      <button className="btn btn-sm btn-soft-brand" onClick={() => adjustQty(a)}><PencilLine size={14} />Adjust Qty</button>
+                      <button className="btn btn-sm btn-soft-red" onClick={() => archive(a)}><Archive size={14} />Archive</button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </DataTable>
+      </Panel>
+    </>
   );
 }

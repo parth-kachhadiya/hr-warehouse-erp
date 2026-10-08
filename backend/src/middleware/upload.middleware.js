@@ -1,17 +1,15 @@
-// Receives photo/video files in memory before sending them to Cloudinary.
-// Exact size limits (MaxPhotoMB / MaxVideoMB) are checked from Settings in media.service.
+// Receives one photo or video in memory before it is sent to Cloudinary
+// (one file per request, like uploadAssetMediaForAsset). Size limits are checked in media.service.
 const multer = require('multer');
 const AppError = require('../utils/AppError');
 
-const storage = multer.memoryStorage();
-const HARD_LIMIT = 100 * 1024 * 1024;
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (/^(image|video)\//.test(file.mimetype)) return cb(null, true);
+    return cb(new AppError(400, 'Only image/video files are allowed.'));
+  },
+}).single('file');
 
-const onlyType = (prefix, label) => (req, file, cb) => {
-  if (file.mimetype.startsWith(prefix)) return cb(null, true);
-  return cb(new AppError(400, `${file.originalname} is not ${label}`));
-};
-
-const photoUpload = multer({ storage, limits: { fileSize: HARD_LIMIT, files: 20 }, fileFilter: onlyType('image/', 'an image') }).array('photos', 20);
-const videoUpload = multer({ storage, limits: { fileSize: HARD_LIMIT, files: 1 }, fileFilter: onlyType('video/', 'a video') }).single('video');
-
-module.exports = { photoUpload, videoUpload };
+module.exports = { mediaUpload };

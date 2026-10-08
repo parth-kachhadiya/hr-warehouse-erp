@@ -1,124 +1,113 @@
-// Monthly storage rent. Rent is DEDUCTED from the seller's payable (not billed separately).
-//
-// How it works, per product with a seller:
-//  1. Replay the inventory ledger to know how many units were physically in the
-//     warehouse at every moment of this month (IST), up to now.
-//  2. units x days x space-per-unit = "space-days" used so far this month.
-//  3. Subtract space-days already billed this month (so running twice never double-bills).
-//  4. Charge = round(new space-days / days in month x rate per sq.ft per month).
+// Monthly storage billing (same as runMonthlyStorageBilling in the old script:
+// quantity-aware, prorated by day, and safe to run twice in a month).
+// Per product with a seller:
+//  1. Replay the inventory ledger to know how many units were in the warehouse at
+//     every moment of this month (IST), up to now. units x days x sq.ft = space-days.
+//  2. Subtract the space-days already billed this month.
+//  3. Charge = round(new space-days / days in month x rate). It is deducted from the seller payable.
 const { Asset, InventoryLedger, StorageLedger, Seller } = require('../models');
 const { nextId } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
-const { monthKey, istMonthBounds, daysBetween } = require('../utils/date');
-const { round2 } = require('../utils/number');
+const { monthKey, istMonthBounds, DAY_MS } = require('../utils/date');
 const audit = require('./audit.service');
+const { physicalQty } = require('./inventory.service');
 const { getSettings } = require('./settings.service');
 
-const round4 = (n) => Math.round(n * 10000) / 10000;
+// storageSpaceDaysAccrued_
+function spaceDaysAccrued(asset, moves, bounds, now) {
+  const end = now < bounds.end ? now : bounds.end;
+  if (end <= bounds.start) return 0;
+  const unitSpace = Number(asset.SpaceSqFt) || 0;
+  if (unitSpace <= 0) return 0;
+  const list = moves.filter((m) => new Date(m.Timestamp) < end);
 
-// Unit-days in the window [start, until) from a sorted list of movements.
-function unitDaysInWindow(moves, start, until) {
   let qty = 0;
-  let cursor = start;
-  let unitDays = 0;
-  for (const m of moves) {
-    const t = new Date(m.Timestamp);
-    if (t >= until) break;
-    if (t <= start) {
-      qty += m.PhysicalQtyDelta;
-      continue;
-    }
-    unitDays += qty * daysBetween(cursor, t);
-    cursor = t;
-    qty += m.PhysicalQtyDelta;
-  }
-  if (until > cursor) unitDays += qty * daysBetween(cursor, until);
-  return { unitDays, currentQty: qty };
+  list.forEach((m) => { if (new Date(m.Timestamp) < bounds.start) qty += Number(m.PhysicalQtyDelta) || 0; });
+  let cursor = bounds.start;
+  let qtyDays = 0;
+  list.forEach((m) => {
+    const d = new Date(m.Timestamp);
+    if (d < bounds.start || d >= end) return;
+    qtyDays += Math.max(0, (d - cursor) / DAY_MS) * Math.max(0, qty);
+    qty += Number(m.PhysicalQtyDelta) || 0;
+    cursor = d;
+  });
+  qtyDays += Math.max(0, (end - cursor) / DAY_MS) * Math.max(0, qty);
+  return qtyDays * unitSpace;
 }
 
 async function runMonthlyStorageBilling({ now = new Date() } = {}) {
   return withTransaction(async (session) => {
+    const month = monthKey(now);
     const settings = await getSettings(session);
-    const rate = settings.StorageRatePerSqFtPerMonth;
-    const Month = monthKey(now);
-    const { start, end, daysInMonth } = istMonthBounds(Month);
-    const until = now < end ? now : end;
+    const rate = Number.isFinite(settings.StorageRatePerSqFtPerMonth) ? settings.StorageRatePerSqFtPerMonth : 25;
+    const { start, end, daysInMonth } = istMonthBounds(month);
+    const bounds = { start, end };
 
-    const assets = await Asset.find({ SellerID: { $nin: ['', null] } }).session(session).lean();
-    const ids = assets.map((a) => a.AssetID);
-    const moves = await InventoryLedger.find({ AssetID: { $in: ids }, Status: 'Active', Timestamp: { $lt: until } })
-      .sort({ Timestamp: 1, MovementID: 1 })
-      .session(session)
-      .lean();
+    const assets = await Asset.find({ SellerID: { $nin: ['', null] } }).sort({ AssetID: 1 }).session(session).lean();
+    const sellers = await Seller.find().session(session).lean();
+    const sellersById = Object.fromEntries(sellers.map((s) => [s.SellerID, s]));
+    const moves = await InventoryLedger.find({ AssetID: { $in: assets.map((a) => a.AssetID) }, Status: { $ne: 'Void' } })
+      .sort({ Timestamp: 1, MovementID: 1 }).session(session).lean();
     const movesByAsset = {};
     moves.forEach((m) => { (movesByAsset[m.AssetID] ||= []).push(m); });
+    const billedRows = await StorageLedger.find({ Month: month, Status: { $ne: 'Void' } }).session(session).lean();
 
-    const billedRows = await StorageLedger.aggregate([
-      { $match: { Month, Status: 'Active', AssetID: { $in: ids } } },
-      { $group: { _id: '$AssetID', spaceDays: { $sum: '$SpaceDaysCharged' } } },
-    ]).session(session);
-    const billed = Object.fromEntries(billedRows.map((r) => [r._id, r.spaceDays]));
-
-    const entries = [];
     const bySeller = {};
-    for (const asset of assets) {
-      const { unitDays, currentQty } = unitDaysInWindow(movesByAsset[asset.AssetID] || [], start, until);
-      const accrued = unitDays * asset.SpaceSqFt;
-      const newSpaceDays = round4(accrued - (billed[asset.AssetID] || 0));
-      if (newSpaceDays <= 0) continue;
-      const Charge = Math.round((newSpaceDays / daysInMonth) * rate);
-      if (Charge <= 0) continue; // tiny amounts wait for the next run
+    for (const a of assets) {
+      const accrued = spaceDaysAccrued(a, movesByAsset[a.AssetID] || [], bounds, now);
+      const billed = billedRows.filter((r) => r.AssetID === a.AssetID).reduce((t, r) => {
+        const explicit = Number(r.SpaceDaysCharged);
+        if (Number.isFinite(explicit) && explicit > 0) return t + explicit;
+        return t + (Number(r.SpaceOccupiedSqFt) || 0) * (Number(r.DaysCharged) || 0);
+      }, 0);
+      const newSpaceDays = Math.max(0, accrued - billed);
+      if (newSpaceDays < 0.0001) continue;
+      const charge = Math.round((newSpaceDays / daysInMonth) * rate);
+      if (charge <= 0) continue;
 
-      const entry = await new StorageLedger({
-        EntryID: await nextId('STG', session),
-        Month,
-        SellerID: asset.SellerID,
-        SellerName: asset.SellerName,
-        SpaceOccupiedSqFt: round2(currentQty * asset.SpaceSqFt),
-        RatePerSqFt: rate,
-        Charge,
-        DateRun: new Date(),
-        AssetID: asset.AssetID,
-        DaysCharged: round2(newSpaceDays / (asset.SpaceSqFt * Math.max(currentQty, 1))),
-        Quantity: currentQty,
-        UnitSpaceSqFt: asset.SpaceSqFt,
-        SpaceDaysCharged: newSpaceDays,
-        Status: 'Active',
+      const currentQty = physicalQty(a);
+      const unitSpace = Number(a.SpaceSqFt) || 0;
+      const sellerName = (sellersById[a.SellerID] || {}).Name || a.SellerName;
+      await new StorageLedger({
+        EntryID: await nextId('STG', session), Month: month, SellerID: a.SellerID, SellerName: sellerName,
+        SpaceOccupiedSqFt: unitSpace * currentQty, RatePerSqFt: rate, Charge: charge, DateRun: new Date(),
+        AssetID: a.AssetID, DaysCharged: unitSpace > 0 ? newSpaceDays / unitSpace : 0,
+        Quantity: currentQty, UnitSpaceSqFt: unitSpace, SpaceDaysCharged: newSpaceDays, Status: 'Active',
       }).save({ session });
-      entries.push(entry.toObject());
-      bySeller[asset.SellerID] = (bySeller[asset.SellerID] || 0) + Charge;
+
+      if (!bySeller[a.SellerID]) bySeller[a.SellerID] = { sellerID: a.SellerID, sellerName, charge: 0 };
+      bySeller[a.SellerID].charge += charge;
     }
 
-    for (const [SellerID, total] of Object.entries(bySeller)) {
-      await Seller.updateOne({ SellerID }, { $inc: { TotalPayable: -total } }, { session });
+    const results = [];
+    for (const id of Object.keys(bySeller)) {
+      await Seller.updateOne({ SellerID: id }, { $inc: { TotalPayable: -bySeller[id].charge } }, { session });
+      results.push(bySeller[id]);
     }
-
-    const totalCharge = entries.reduce((s, e) => s + e.Charge, 0);
-    await audit.log('RUN_STORAGE_BILLING', 'StorageLedger', Month, { entries: entries.length, totalCharge, bySeller }, session);
-    return { Month, entries, totalCharge, bySeller, daysInMonth, rate };
+    await audit.log('STORAGE_BILLING', 'Storage', month, {
+      sellerCount: results.length, total: results.reduce((t, r) => t + r.charge, 0),
+    }, session);
+    return results;
   });
 }
 
-async function listStorageLedger({ month } = {}) {
-  return StorageLedger.find(month ? { Month: month } : {}).sort({ EntryID: -1 }).lean();
+async function getStorageLedger() {
+  return StorageLedger.find({ Status: { $ne: 'Void' } }).sort({ DateRun: -1, EntryID: -1 }).lean();
 }
 
-// Space each seller is using right now.
-async function sellerSpaceSummary() {
-  const rows = await Asset.aggregate([
-    { $match: { Status: { $nin: ['Archived', 'Sold'] }, SellerID: { $nin: ['', null] } } },
-    {
-      $group: {
-        _id: '$SellerID',
-        SellerName: { $first: '$SellerName' },
-        Products: { $sum: 1 },
-        Units: { $sum: { $add: ['$QuantityAvailable', '$QuantityReserved'] } },
-        SpaceSqFt: { $sum: { $multiply: ['$SpaceSqFt', { $add: ['$QuantityAvailable', '$QuantityReserved'] }] } },
-      },
-    },
-    { $sort: { _id: 1 } },
-  ]);
-  return rows.map((r) => ({ SellerID: r._id, SellerName: r.SellerName, Products: r.Products, Units: r.Units, SpaceSqFt: round2(r.SpaceSqFt) }));
+async function getSellerSpaceSummary() {
+  const sellers = await Seller.find().sort({ SellerID: 1 }).lean();
+  const assets = await Asset.find({ Status: { $ne: 'Archived' } }).lean();
+  return sellers.map((s) => {
+    const mine = assets.filter((a) => a.SellerID === s.SellerID && physicalQty(a) > 0);
+    return {
+      sellerID: s.SellerID,
+      sellerName: s.Name,
+      physicalQty: mine.reduce((t, a) => t + physicalQty(a), 0),
+      spaceOccupied: mine.reduce((t, a) => t + (Number(a.SpaceSqFt) || 0) * physicalQty(a), 0),
+    };
+  }).filter((r) => r.spaceOccupied > 0);
 }
 
-module.exports = { runMonthlyStorageBilling, listStorageLedger, sellerSpaceSummary, unitDaysInWindow };
+module.exports = { runMonthlyStorageBilling, getStorageLedger, getSellerSpaceSummary, spaceDaysAccrued };

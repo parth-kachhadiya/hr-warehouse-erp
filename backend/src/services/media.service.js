@@ -1,13 +1,13 @@
-// Photos and video for products, stored in Cloudinary with the same folder layout
-// as the old Google Drive: "HR Warehouse Media / SEL-0001 - Seller Name / Images|Video".
+// Product photos and video (same as uploadAssetMediaForAsset in the old script).
+// Cloudinary folders copy the old Drive layout:
+// "HR Warehouse Media / SEL-0001 - Seller Name / Images|Video", files named Product_Name_001, 002...
 const { Asset, Seller } = require('../models');
 const { cloudinary, isConfigured } = require('../config/cloudinary');
 const AppError = require('../utils/AppError');
 const audit = require('./audit.service');
 const { getSettings } = require('./settings.service');
 
-const safe = (s) => String(s || '').replace(/[^a-zA-Z0-9 _-]/g, '').trim();
-const fileBase = (itemName) => safe(itemName).replace(/\s+/g, '_') || 'Item';
+const safeName = (s) => (String(s || '').replace(/[\\/:*?"<>|#%{}~&]/g, ' ').replace(/\s+/g, ' ').trim() || 'Unnamed').substring(0, 120);
 
 function uploadBuffer(buffer, options) {
   return new Promise((resolve, reject) => {
@@ -17,64 +17,50 @@ function uploadBuffer(buffer, options) {
 }
 
 async function sellerFolder(asset, root) {
-  if (!asset.SellerID) return `${root}/Unassigned`;
-  const seller = await Seller.findOne({ SellerID: asset.SellerID });
-  const folder = `${root}/${asset.SellerID} - ${safe(seller ? seller.Name : asset.SellerName)}`;
-  if (seller && seller.MediaFolderId !== folder) {
-    seller.MediaFolderId = folder;
-    await seller.save();
+  if (asset.SellerID) {
+    const seller = await Seller.findOne({ SellerID: asset.SellerID });
+    if (seller) {
+      const folder = `${root}/${safeName(`${asset.SellerID} - ${seller.Name || asset.SellerName || 'Seller'}`)}`;
+      if (seller.MediaFolderId !== folder) {
+        seller.MediaFolderId = folder;
+        await seller.save();
+      }
+      return folder;
+    }
   }
-  return folder;
+  return `${root}/NO-SELLER - Unassigned`;
 }
 
-async function loadAsset(assetId) {
+async function uploadAssetMedia(assetID, file) {
+  if (!file) throw new AppError(400, 'Invalid media upload.');
   if (!isConfigured) throw new AppError(503, 'Media storage is not set up. Add the CLOUDINARY_* values to backend/.env');
-  const asset = await Asset.findOne({ AssetID: assetId });
-  if (!asset) throw new AppError(404, 'Product not found');
-  if (asset.Status === 'Sold') throw new AppError(400, 'Sold products cannot be changed');
-  return asset;
-}
-
-async function uploadPhotos(assetId, files = []) {
-  if (!files.length) throw new AppError(400, 'Choose at least one photo');
+  const asset = await Asset.findOne({ AssetID: assetID });
+  if (!asset) throw new AppError(404, 'Asset not found.');
   const settings = await getSettings();
-  const maxBytes = settings.MaxPhotoMB * 1024 * 1024;
-  const tooBig = files.find((f) => f.size > maxBytes);
-  if (tooBig) throw new AppError(400, `${tooBig.originalname} is larger than ${settings.MaxPhotoMB} MB`);
+  const isImage = file.mimetype.startsWith('image/');
+  const isVideo = file.mimetype.startsWith('video/');
+  if (!isImage && !isVideo) throw new AppError(400, 'Only image/video files are allowed.');
+  const maxMB = isImage ? settings.MaxPhotoMB || 8 : settings.MaxVideoMB || 25;
+  if (file.size > maxMB * 1024 * 1024) throw new AppError(400, `${isImage ? 'Photo' : 'Video'} exceeds ${maxMB} MB limit.`);
+  if (isVideo && asset.VideoFileId) throw new AppError(400, 'This product already has a video.');
 
-  const asset = await loadAsset(assetId);
-  const folder = `${await sellerFolder(asset, settings.MediaRootFolderId)}/Images`;
-  let n = asset.PhotoFileIds.length;
-  const uploaded = [];
-  for (const file of files) {
-    n += 1;
-    const name = `${fileBase(asset.ItemName)}_${String(n).padStart(3, '0')}`;
-    const result = await uploadBuffer(file.buffer, { folder, public_id: name, resource_type: 'image', overwrite: false, unique_filename: true });
-    uploaded.push({ link: result.secure_url, id: result.public_id });
+  const folder = `${await sellerFolder(asset, settings.MediaRootFolderId || 'HR Warehouse Media')}/${isImage ? 'Images' : 'Video'}`;
+  const count = isImage ? asset.PhotoFileIds.length : 0;
+  const fileName = `${safeName(asset.ItemName).replace(/\s+/g, '_')}_${String(count + 1).padStart(3, '0')}`;
+  const result = await uploadBuffer(file.buffer, {
+    folder, public_id: fileName, resource_type: isImage ? 'image' : 'video', overwrite: false, unique_filename: false,
+  });
+
+  if (isImage) {
+    asset.PhotoLinks.push(result.secure_url);
+    asset.PhotoFileIds.push(result.public_id);
+  } else {
+    asset.VideoLink = result.secure_url;
+    asset.VideoFileId = result.public_id;
   }
-  asset.PhotoLinks.push(...uploaded.map((u) => u.link));
-  asset.PhotoFileIds.push(...uploaded.map((u) => u.id));
   await asset.save();
-  await audit.log('UPLOAD_PHOTOS', 'Asset', assetId, { count: uploaded.length });
-  return asset.toObject();
+  await audit.log('MEDIA_UPLOAD', 'Asset', assetID, { fileId: result.public_id, fileName, type: isImage ? 'image' : 'video' });
+  return { url: result.secure_url, fileId: result.public_id, fileName };
 }
 
-// One video per product: a new upload replaces the old one.
-async function uploadVideo(assetId, file) {
-  if (!file) throw new AppError(400, 'Choose a video');
-  const settings = await getSettings();
-  if (file.size > settings.MaxVideoMB * 1024 * 1024) throw new AppError(400, `Video is larger than ${settings.MaxVideoMB} MB`);
-
-  const asset = await loadAsset(assetId);
-  const folder = `${await sellerFolder(asset, settings.MediaRootFolderId)}/Video`;
-  const result = await uploadBuffer(file.buffer, { folder, public_id: `${fileBase(asset.ItemName)}_video`, resource_type: 'video', overwrite: false, unique_filename: true });
-  const oldId = asset.VideoFileId;
-  asset.VideoLink = result.secure_url;
-  asset.VideoFileId = result.public_id;
-  await asset.save();
-  if (oldId) await cloudinary.uploader.destroy(oldId, { resource_type: 'video' }).catch(() => {});
-  await audit.log('UPLOAD_VIDEO', 'Asset', assetId, { replaced: Boolean(oldId) });
-  return asset.toObject();
-}
-
-module.exports = { uploadPhotos, uploadVideo };
+module.exports = { uploadAssetMedia };

@@ -1,101 +1,131 @@
-import { useState } from 'react';
-import { addAsset, getWarehouseSpace } from '../api/assets.api';
-import { listSellers } from '../api/sellers.api';
-import { getSettings, listCategories, listCustomFields } from '../api/system.api';
-import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import FormField from '../components/common/FormField';
-import Message from '../components/common/Message';
-import MediaUploader from '../components/common/MediaUploader';
+import { useEffect, useRef, useState } from 'react';
+import { Save } from 'lucide-react';
+import { addAsset, getCategories, getCustomFields, getSellers, uploadAssetMediaForAsset } from '../api/erp.api';
+import { Alert, Field, PageHeader, Panel } from '../components/common/ui';
 import { CONDITION_GRADES } from '../utils/constants';
-import { formatNumber } from '../utils/format';
 
-const EMPTY = { ItemName: '', Category: '', SellerID: '', ConditionGrade: 'C', QuantityReceived: '1', SpaceSqFt: '', ReservePrice: '', ListedPrice: '', Notes: '' };
+const EMPTY = { itemName: '', category: '', conditionGrade: 'C', sellerID: '', quantity: '1', spaceSqFt: '', reservePrice: '', listedPrice: '', notes: '' };
 
 export default function AddProduct() {
-  const lists = useFetch(async () => {
-    const [sellers, categories, fields, space, settings] = await Promise.all([
-      listSellers(), listCategories(), listCustomFields(), getWarehouseSpace(), getSettings(),
-    ]);
-    return { sellers, categories, fields, space, settings };
-  });
-  const { message, setMessage, run } = useAction();
-  const [form, setForm] = useState(EMPTY);
+  const [f, setF] = useState(EMPTY);
+  const [sellers, setSellers] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [fields, setFields] = useState([]);
   const [custom, setCustom] = useState({});
-  const [created, setCreated] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [progress, setProgress] = useState('');
   const [busy, setBusy] = useState(false);
+  const photosRef = useRef(null);
+  const videoRef = useRef(null);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-  const d = lists.data;
-  const needed = (Number(form.SpaceSqFt) || 0) * (Number(form.QuantityReceived) || 0);
+  useEffect(() => {
+    getSellers().then(setSellers).catch((e) => setMsg({ err: true, text: e.message }));
+    getCategories().then((rows) => {
+      setCategories(rows.length ? rows.map((c) => c.Name) : ['Other']);
+      setF((cur) => ({ ...cur, category: cur.category || (rows[0] ? rows[0].Name : 'Other') }));
+    }).catch((e) => setMsg({ err: true, text: e.message }));
+    getCustomFields('Assets').then(setFields).catch(() => {});
+  }, []);
+
+  const totalSpace = (Number(f.quantity) || 0) * (Number(f.spaceSqFt) || 0);
 
   const submit = async (e) => {
     e.preventDefault();
-    setBusy(true);
-    const asset = await run(() => addAsset({ ...form, CustomFieldsData: custom }), (a) => `Product ${a.AssetID} added. You can now upload photos and video below.`);
-    setBusy(false);
-    if (asset) {
-      setCreated(asset);
-      setForm(EMPTY);
-      setCustom({});
-      lists.reload({ silent: true });
+    const qty = Number(f.quantity);
+    const space = Number(f.spaceSqFt);
+    if (!f.itemName.trim() || !qty || qty < 1 || !space || space <= 0) {
+      return setMsg({ err: true, text: 'Item name, quantity and space per unit are required' });
     }
+    setBusy(true);
+    setProgress('Creating product...');
+    const customFields = Object.fromEntries(Object.entries(custom).filter(([, v]) => v));
+    let assetID;
+    try {
+      assetID = await addAsset({ ...f, quantity: qty, spaceSqFt: space, customFields });
+    } catch (err) {
+      setBusy(false);
+      setProgress('');
+      return setMsg({ err: true, text: `Error: ${err.message}` });
+    }
+
+    setProgress('Product saved. Uploading media...');
+    const uploaded = [];
+    try {
+      for (const file of Array.from(photosRef.current.files)) {
+        const r = await uploadAssetMediaForAsset(assetID, file);
+        uploaded.push(r.fileName);
+        setProgress(`Uploaded ${uploaded.length} media file(s)...`);
+      }
+      const video = videoRef.current.files[0];
+      if (video) uploaded.push((await uploadAssetMediaForAsset(assetID, video)).fileName);
+      setMsg({ text: `Saved ${assetID} — Qty ${qty}. ${uploaded.length ? `Media: ${uploaded.join(', ')}` : 'No media uploaded.'}` });
+      setF((cur) => ({ ...EMPTY, category: cur.category, conditionGrade: cur.conditionGrade, sellerID: cur.sellerID }));
+      setCustom({});
+      photosRef.current.value = '';
+      videoRef.current.value = '';
+    } catch (err) {
+      setMsg({ err: true, text: `Product ${assetID} saved, but some media upload failed: ${err.message}. You can continue using the product.` });
+    } finally {
+      setBusy(false);
+      setProgress('');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Add Product</h1>
-        {d && (
-          <span className="muted">
-            Warehouse: {formatNumber(d.space.used)} / {formatNumber(d.space.capacity)} sq.ft used ({formatNumber(d.space.utilization)}%)
-          </span>
-        )}
-      </div>
-      <Message message={message || (lists.error && { type: 'error', text: lists.error })} onClose={() => setMessage(null)} />
+    <>
+      <PageHeader title="Add Product" subtitle="Receive new stock into the warehouse." />
+      <Alert msg={msg} />
+      <form noValidate onSubmit={submit}>
+        <Panel title="Product details">
+          <div className="form-grid">
+            <Field label="Item Name" required><input value={f.itemName} onChange={set('itemName')} placeholder="e.g. Steel Table" /></Field>
+            <Field label="Category">
+              <select value={f.category} onChange={set('category')}>{categories.map((c) => <option key={c}>{c}</option>)}</select>
+            </Field>
+            <Field label="Condition Grade">
+              <select value={f.conditionGrade} onChange={set('conditionGrade')}>{CONDITION_GRADES.map((g) => <option key={g}>{g}</option>)}</select>
+            </Field>
+            <Field label="Seller">
+              <select value={f.sellerID} onChange={set('sellerID')}>
+                <option value="">-- none --</option>
+                {sellers.map((s) => <option key={s.SellerID} value={s.SellerID}>{s.Name} — {s.Phone || 'no phone'}</option>)}
+              </select>
+            </Field>
+          </div>
+        </Panel>
 
-      <form className="card form-grid" onSubmit={submit}>
-        <FormField label="Item name" required><input value={form.ItemName} onChange={set('ItemName')} required /></FormField>
-        <FormField label="Category">
-          <select value={form.Category} onChange={set('Category')}>
-            <option value="">— Select —</option>
-            {d?.categories.map((c) => <option key={c.CategoryID} value={c.Name}>{c.Name}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Seller">
-          <select value={form.SellerID} onChange={set('SellerID')}>
-            <option value="">— No seller —</option>
-            {d?.sellers.map((s) => <option key={s.SellerID} value={s.SellerID}>{s.SellerID} · {s.Name}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Condition grade">
-          <select value={form.ConditionGrade} onChange={set('ConditionGrade')}>
-            {CONDITION_GRADES.map((g) => <option key={g}>{g}</option>)}
-          </select>
-        </FormField>
-        <FormField label="Quantity" required><input type="number" min="1" step="1" value={form.QuantityReceived} onChange={set('QuantityReceived')} required /></FormField>
-        <FormField label="Space per unit (sq.ft)" required hint={needed ? `Needs ${formatNumber(needed)} sq.ft in total` : undefined}>
-          <input type="number" min="0" step="any" value={form.SpaceSqFt} onChange={set('SpaceSqFt')} required />
-        </FormField>
-        <FormField label="Reserve price per unit (₹)"><input type="number" min="0" step="any" value={form.ReservePrice} onChange={set('ReservePrice')} /></FormField>
-        <FormField label="Listed price per unit (₹)"><input type="number" min="0" step="any" value={form.ListedPrice} onChange={set('ListedPrice')} /></FormField>
-        {d?.fields.map((f) => (
-          <FormField key={f.FieldID} label={f.FieldName}>
-            <input value={custom[f.FieldName] || ''} onChange={(e) => setCustom((c) => ({ ...c, [f.FieldName]: e.target.value }))} />
-          </FormField>
-        ))}
-        <FormField label="Notes" wide><textarea rows={2} value={form.Notes} onChange={set('Notes')} /></FormField>
-        <div className="form-actions">
-          <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Add product'}</button>
+        <Panel title="Quantity, space and price">
+          <div className="form-grid">
+            <Field label="Quantity" required><input type="number" min="1" step="1" inputMode="numeric" value={f.quantity} onChange={set('quantity')} /></Field>
+            <Field label="Space per Unit (sq.ft)" required><input type="number" min="0.01" step="0.01" inputMode="decimal" value={f.spaceSqFt} onChange={set('spaceSqFt')} /></Field>
+            <Field label="Total Space"><div className="readout">{totalSpace.toLocaleString('en-IN')} sq.ft</div></Field>
+            <Field label="Reserve Price / Unit (₹)"><input type="number" min="0" inputMode="decimal" value={f.reservePrice} onChange={set('reservePrice')} /></Field>
+            <Field label="Listed Price / Unit (₹)"><input type="number" min="0" inputMode="decimal" value={f.listedPrice} onChange={set('listedPrice')} /></Field>
+          </div>
+        </Panel>
+
+        <Panel title="Photos, video and notes" description="Saved as HR Warehouse Media → SellerID - Seller Name → Images / Video, named Product_Name_001, 002...">
+          <div className="form-grid">
+            <Field label="Photos (multiple allowed)"><input ref={photosRef} type="file" accept="image/*" multiple /></Field>
+            <Field label="Video (optional)"><input ref={videoRef} type="file" accept="video/*" /></Field>
+            {fields.map((fd) => (
+              <Field key={fd.FieldID} label={fd.FieldName}>
+                <input value={custom[fd.FieldName] || ''} onChange={(e) => setCustom({ ...custom, [fd.FieldName]: e.target.value })} />
+              </Field>
+            ))}
+            <Field label="Notes" span><textarea rows={3} value={f.notes} onChange={set('notes')} /></Field>
+          </div>
+        </Panel>
+
+        <div className="panel">
+          <div className="panel-footer" style={{ borderTop: 0, borderRadius: 'var(--radius)' }}>
+            <span className="muted">{progress}</span>
+            <button className="btn btn-primary" disabled={busy}><Save size={16} />{busy ? 'Saving...' : 'Save Product'}</button>
+          </div>
         </div>
       </form>
-
-      {created && (
-        <section className="card">
-          <h2>Photos & video for {created.AssetID} · {created.ItemName}</h2>
-          <MediaUploader asset={created} onUpdated={setCreated} maxPhotoMB={d?.settings.MaxPhotoMB} maxVideoMB={d?.settings.MaxVideoMB} />
-        </section>
-      )}
-    </div>
+    </>
   );
 }

@@ -1,6 +1,9 @@
 // Reads and writes the key/value Settings, turning text into numbers and true/false.
 const { Setting } = require('../models');
 const AppError = require('../utils/AppError');
+const { num } = require('../utils/number');
+const { withTransaction } = require('../utils/transaction');
+const audit = require('./audit.service');
 
 const DEFAULT_SETTINGS = {
   WarehouseCapacitySqFt: '4000',
@@ -16,13 +19,12 @@ const DEFAULT_SETTINGS = {
   MaxPhotoMB: '8',
   MaxVideoMB: '25',
   MediaRootFolderId: 'HR Warehouse Media',
-  ERPVersion: '2.4',
+  ERPVersion: '2.4-SPEED',
 };
 
 const BOOLEAN_KEYS = ['RequireReservePriceApproval', 'EnforceWarehouseCapacity'];
 const TEXT_KEYS = ['MediaRootFolderId', 'ERPVersion'];
 const RATE_KEYS = ['CommissionTier1Rate', 'CommissionTier2Rate', 'CommissionTier3Rate'];
-const READ_ONLY_KEYS = ['ERPVersion'];
 
 function parse(key, value) {
   if (BOOLEAN_KEYS.includes(key)) return String(value).toLowerCase() === 'true';
@@ -39,26 +41,26 @@ async function getSettings(session) {
   return settings;
 }
 
-async function updateSettings(updates, session) {
-  const changed = {};
-  for (const [key, value] of Object.entries(updates || {})) {
-    if (!(key in DEFAULT_SETTINGS)) throw new AppError(400, `Unknown setting: ${key}`);
-    if (READ_ONLY_KEYS.includes(key)) continue;
-    let text;
-    if (BOOLEAN_KEYS.includes(key)) {
-      text = String(value === true || String(value).toLowerCase() === 'true');
-    } else if (TEXT_KEYS.includes(key)) {
-      text = String(value ?? '').trim();
-    } else {
-      const n = Number(value);
-      if (!Number.isFinite(n) || n < 0) throw new AppError(400, `${key} must be a number of 0 or more`);
-      if (RATE_KEYS.includes(key) && n > 1) throw new AppError(400, `${key} must be a rate between 0 and 1 (10% = 0.10)`);
-      text = String(n);
+// Same checks as updateSettings in the old script; writes one SETTINGS_UPDATE audit row.
+async function updateSettings(newSettings = {}) {
+  return withTransaction(async (session) => {
+    for (const [key, value] of Object.entries(newSettings)) {
+      if (!(key in DEFAULT_SETTINGS)) throw new AppError(400, `Unknown setting: ${key}`);
+      let stored;
+      if (BOOLEAN_KEYS.includes(key)) {
+        stored = String(value === true || String(value).toLowerCase() === 'true');
+      } else if (TEXT_KEYS.includes(key)) {
+        stored = String(value ?? '').trim();
+      } else {
+        const n = num(value, key, { nonnegative: true });
+        if (RATE_KEYS.includes(key) && n > 1) throw new AppError(400, `${key} must be between 0 and 1.`);
+        stored = String(n);
+      }
+      await Setting.updateOne({ Key: key }, { $set: { Value: stored } }, { upsert: true, session });
     }
-    await Setting.updateOne({ Key: key }, { $set: { Value: text } }, { upsert: true, session });
-    changed[key] = text;
-  }
-  return changed;
+    await audit.log('SETTINGS_UPDATE', 'Settings', 'ERP', newSettings, session);
+    return true;
+  });
 }
 
 module.exports = { DEFAULT_SETTINGS, getSettings, updateSettings };

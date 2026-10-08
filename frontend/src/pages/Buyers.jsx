@@ -1,94 +1,58 @@
 import { useState } from 'react';
-import { archiveBuyer, createBuyer, listBuyers, updateBuyer } from '../api/buyers.api';
+import { Plus } from 'lucide-react';
+import { addBuyer, getBuyers } from '../api/erp.api';
 import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import DataTable from '../components/common/DataTable';
-import FormField from '../components/common/FormField';
-import Message from '../components/common/Message';
-import StatusBadge from '../components/common/StatusBadge';
+import { Alert, DataTable, Field, PageHeader, Panel } from '../components/common/ui';
 import { useModal } from '../components/common/Modal';
-import { formatDate, formatINR } from '../utils/format';
+import { fmt } from '../utils/format';
 
-const EMPTY = { Name: '', Phone: '', Email: '', Address: '', GSTIN: '' };
+const EMPTY = { name: '', phone: '', email: '' };
 
 export default function Buyers() {
-  const [showArchived, setShowArchived] = useState(false);
-  const buyers = useFetch(() => listBuyers(showArchived), [showArchived]);
-  const { message, setMessage, run } = useAction();
+  const { data, reload, error } = useFetch(getBuyers);
+  const [b, setB] = useState(EMPTY);
+  const [busy, setBusy] = useState(false);
   const modal = useModal();
-  const [form, setForm] = useState(EMPTY);
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-  const refresh = () => buyers.reload({ silent: true });
+  const set = (k) => (e) => setB({ ...b, [k]: e.target.value });
 
   const submit = async (e) => {
     e.preventDefault();
-    if (await run(() => createBuyer(form), (b) => `Buyer ${b.BuyerID} added`)) {
-      setForm(EMPTY);
-      refresh();
+    if (!b.name.trim()) return modal.alert('Name required');
+    setBusy(true);
+    try {
+      await addBuyer(b);
+      setB(EMPTY);
+      reload();
+    } catch (err) {
+      modal.alert(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const edit = async (b) => {
-    const values = await modal.form({
-      title: `Edit ${b.BuyerID}`,
-      confirmText: 'Save',
-      fields: [
-        { name: 'Name', label: 'Name', defaultValue: b.Name },
-        { name: 'Phone', label: 'Phone', required: false, defaultValue: b.Phone },
-        { name: 'Email', label: 'Email', required: false, defaultValue: b.Email },
-        { name: 'Address', label: 'Address', type: 'textarea', required: false, defaultValue: b.Address },
-        { name: 'GSTIN', label: 'GSTIN', required: false, defaultValue: b.GSTIN },
-      ],
-    });
-    if (values && (await run(() => updateBuyer(b.BuyerID, values), `${b.BuyerID} updated`))) refresh();
-  };
-
-  const archive = async (b) => {
-    if (!(await modal.confirm(`Archive buyer ${b.BuyerID} (${b.Name})?`, { confirmText: 'Archive', danger: true }))) return;
-    if (await run(() => archiveBuyer(b.BuyerID), `${b.BuyerID} archived`)) refresh();
-  };
-
+  const rows = data || [];
   return (
-    <div className="page">
-      <div className="page-header"><h1>Buyers</h1></div>
-      <Message message={message || (buyers.error && { type: 'error', text: buyers.error })} onClose={() => setMessage(null)} />
-
-      <form className="card form-grid" onSubmit={submit}>
-        <FormField label="Name" required><input value={form.Name} onChange={set('Name')} required /></FormField>
-        <FormField label="Phone"><input value={form.Phone} onChange={set('Phone')} /></FormField>
-        <FormField label="Email"><input type="email" value={form.Email} onChange={set('Email')} /></FormField>
-        <FormField label="GSTIN"><input value={form.GSTIN} onChange={set('GSTIN')} /></FormField>
-        <FormField label="Address" wide><textarea rows={2} value={form.Address} onChange={set('Address')} /></FormField>
-        <div className="form-actions"><button className="btn btn-primary">Add buyer</button></div>
+    <>
+      <PageHeader title="Buyers" subtitle="Customers who buy from the warehouse." />
+      <Alert msg={error && { err: true, text: error }} />
+      <form noValidate onSubmit={submit}>
+        <Panel title="Add buyer" footer={<button className="btn btn-primary" disabled={busy}><Plus size={16} />{busy ? 'Saving...' : 'Add Buyer'}</button>}>
+          <div className="form-grid">
+            <Field label="Name" required><input value={b.name} onChange={set('name')} /></Field>
+            <Field label="Phone"><input value={b.phone} onChange={set('phone')} inputMode="tel" /></Field>
+            <Field label="Email"><input value={b.email} onChange={set('email')} type="email" /></Field>
+          </div>
+        </Panel>
       </form>
-
-      <div className="toolbar">
-        <label className="check"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived</label>
-      </div>
-      <DataTable
-        rowKey="BuyerID"
-        rows={buyers.data}
-        loading={buyers.loading}
-        columns={[
-          { key: 'BuyerID', label: 'ID' },
-          { key: 'Name', label: 'Name' },
-          { key: 'Phone', label: 'Phone' },
-          { key: 'Email', label: 'Email' },
-          { key: 'GSTIN', label: 'GSTIN' },
-          { key: 'JoinDate', label: 'Joined', render: (b) => formatDate(b.JoinDate) },
-          { key: 'TotalPurchased', label: 'Total purchased', align: 'right', render: (b) => formatINR(b.TotalPurchased) },
-          { key: 'Active', label: 'Status', render: (b) => <StatusBadge status={b.Active ? 'Active' : 'Archived'} /> },
-          {
-            key: 'actions', label: 'Actions',
-            render: (b) => b.Active && (
-              <div className="actions">
-                <button className="btn btn-small" onClick={() => edit(b)}>Edit</button>
-                <button className="btn btn-small btn-danger-outline" onClick={() => archive(b)}>Archive</button>
-              </div>
-            ),
-          },
-        ]}
-      />
-    </div>
+      <Panel title="All buyers" flush>
+        <DataTable head={['ID', 'Name', 'Phone', 'Total Purchased ₹']} rows={data ? rows.length : -1} empty="No buyers yet">
+          {rows.map((r) => (
+            <tr key={r.BuyerID}>
+              <td className="id-cell">{r.BuyerID}</td><td className="item-cell">{r.Name}</td><td>{r.Phone || '-'}</td><td className="strong">{fmt(r.TotalPurchased)}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </Panel>
+    </>
   );
 }

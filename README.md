@@ -22,12 +22,13 @@ cd frontend && npm install && npm run dev     # App on http://localhost:5173
 
 ## How a request flows
 
-React page → `frontend/src/api/*.js` (axios) → `backend/src/routes` → `controllers` → `services` → `models` → MongoDB
+React page → `frontend/src/api/erp.api.js` (axios) → `backend/src/routes` → `controllers` → `services` → `models` → MongoDB
 
 - **routes** only list URLs
 - **controllers** read the request and send the response
-- **services** hold the real business logic (the old Apps Script functions live here, with the same names:
-  `addAsset`, `createSale`, `recordPayment`, `markOrderDelivered`, `voidSale`, `paySeller`, `runMonthlyStorageBilling`)
+- **services** hold the real business logic. Every old Apps Script function lives here with the same name,
+  rules and error messages (`addAsset`, `createSale`, `recordPayment`, `markOrderDelivered`, `voidSale`,
+  `paySeller`, `runMonthlyStorageBilling`, `getDashboardData`, ...). `erp.api.js` uses the same names on the screen side.
 
 ## Old system → new system
 
@@ -38,7 +39,7 @@ React page → `frontend/src/api/*.js` (axios) → `backend/src/routes` → `con
 | LockService + manual rollback         | MongoDB transactions (`utils/transaction.js`)|
 | Google Drive media folders            | Cloudinary, same folder layout               |
 | `google.script.run.fn()`              | `/api/...` REST calls                        |
-| `prompt()` / `confirm()`              | React modal (`components/common/Modal.jsx`)  |
+| `prompt()` / `confirm()` / `alert()`  | React modal (`components/common/Modal.jsx`)  |
 | Dashboard refresh every 3 s           | Same (only while the tab is visible)         |
 | Audit "Actor" = user email            | "Admin"                                      |
 

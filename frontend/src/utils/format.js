@@ -1,19 +1,22 @@
-// Money in ₹ (Indian grouping) and dates in India Standard Time.
-const inr = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 });
-const num = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
-const dateFmt = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
+// Same helpers as the old screen: fmt() for ₹ amounts, formatDateTime() in India Standard Time,
+// statusClass() for badge colours.
+export const fmt = (n) => { const v = Number(n) || 0; return `${v < 0 ? '-' : ''}₹${Math.abs(v).toLocaleString('en-IN')}`; };
+export const statusClass = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const dateTimeFmt = new Intl.DateTimeFormat('en-IN', {
-  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
 });
+export function formatDateTime(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? '-' : dateTimeFmt.format(d);
+}
 
-export const formatINR = (n) => inr.format(Number(n) || 0);
-export const formatNumber = (n) => num.format(Number(n) || 0);
-export const formatPercent = (rate) => `${num.format((Number(rate) || 0) * 100)}%`;
-export const formatDate = (d) => (d ? dateFmt.format(new Date(d)) : '-');
-export const formatDateTime = (d) => (d ? dateTimeFmt.format(new Date(d)) : '-');
-
-// Today's date as yyyy-mm-dd in IST, for date inputs.
-export const todayIST = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
-
-// "2026-10" for the current IST month.
-export const currentMonthIST = () => todayIST().slice(0, 7);
+export const safeUrl = (url) => {
+  try {
+    const u = new URL(String(url || ''));
+    return ['http:', 'https:'].includes(u.protocol) ? u.href : '#';
+  } catch {
+    return '#';
+  }
+};

@@ -9,14 +9,16 @@ async function log(action, entityType, entityId, details = {}, session) {
     Timestamp: new Date(),
     Actor: 'Admin',
     Action: action,
-    EntityType: entityType,
+    EntityType: entityType || '',
     EntityID: entityId || '',
-    Details: details,
+    Details: details || {},
   }).save({ session });
 }
 
-async function listRecent(limit = 150) {
-  return AuditLog.find().sort({ Timestamp: -1, AuditID: -1 }).limit(limit).lean();
+// Same as getAuditLog(limit): newest first, default 100, at most 500.
+async function getAuditLog(limit) {
+  const n = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  return AuditLog.find().sort({ Timestamp: -1, AuditID: -1 }).limit(n).lean();
 }
 
-module.exports = { log, listRecent };
+module.exports = { log, getAuditLog };

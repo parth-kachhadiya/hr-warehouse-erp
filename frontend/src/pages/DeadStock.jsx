@@ -1,42 +1,32 @@
-import { getDeadStock } from '../api/finance.api';
+import { getDeadStockReport } from '../api/erp.api';
 import useFetch from '../hooks/useFetch';
-import DataTable from '../components/common/DataTable';
-import StatCard from '../components/common/StatCard';
-import StatusBadge from '../components/common/StatusBadge';
-import Message from '../components/common/Message';
-import { formatDate, formatINR } from '../utils/format';
+import { Alert, Badge, DataTable, PageHeader, Panel } from '../components/common/ui';
 
-const BUCKETS = ['0-29 days', '30-59 days', '60-89 days', '90-179 days', '180+ days'];
+const toneFor = (days) => (days >= 180 ? 'violet' : days >= 90 ? 'red' : days >= 60 ? 'amber' : days >= 30 ? 'amber' : 'green');
 
 export default function DeadStock() {
-  const { data, loading, error } = useFetch(getDeadStock);
-  const count = (bucket) => (data || []).filter((d) => d.Bucket === bucket).length;
-
+  const { data, error } = useFetch(getDeadStockReport);
+  const rows = data || [];
   return (
-    <div className="page">
-      <div className="page-header"><h1>Dead Stock</h1></div>
-      <Message message={error ? { type: 'error', text: error } : null} />
-      <div className="stats">
-        {BUCKETS.map((b) => <StatCard key={b} label={b} value={count(b)} tone={b === '0-29 days' ? undefined : 'orange'} />)}
-      </div>
-      <DataTable
-        rowKey="AssetID"
-        rows={data}
-        loading={loading}
-        empty="No unsold stock."
-        columns={[
-          { key: 'AssetID', label: 'ID' },
-          { key: 'ItemName', label: 'Item' },
-          { key: 'SellerName', label: 'Seller' },
-          { key: 'Status', label: 'Status', render: (d) => <StatusBadge status={d.Status} /> },
-          { key: 'DateReceived', label: 'Received', render: (d) => formatDate(d.DateReceived) },
-          { key: 'DaysInStock', label: 'Days', align: 'right' },
-          { key: 'QuantityAvailable', label: 'Available', align: 'right' },
-          { key: 'ListedPrice', label: 'Listed', align: 'right', render: (d) => formatINR(d.ListedPrice) },
-          { key: 'Bucket', label: 'Age' },
-          { key: 'Action', label: 'Suggested action', render: (d) => <StatusBadge status={d.Action} /> },
-        ]}
-      />
-    </div>
+    <>
+      <PageHeader title="Dead Stock Report" subtitle="How long each product has been sitting, and what to do about it." />
+      <Alert msg={error && { err: true, text: error }} />
+      <Panel flush>
+        <DataTable rows={data ? rows.length : -1} empty="No active stock"
+          head={['Item', 'Available', 'Reserved', 'Physical Qty', 'Days in Stock', 'Bucket', 'Suggested Action']}>
+          {rows.map((a) => (
+            <tr key={a.AssetID}>
+              <td className="item-cell">{a.ItemName}</td>
+              <td>{a.QuantityAvailable || 0}</td>
+              <td>{a.QuantityReserved || 0}</td>
+              <td>{(Number(a.QuantityAvailable) || 0) + (Number(a.QuantityReserved) || 0)}</td>
+              <td className="strong">{a.daysInStock}</td>
+              <td><Badge tone={toneFor(a.daysInStock)}>{a.agingBucket}</Badge></td>
+              <td>{a.suggestedAction}</td>
+            </tr>
+          ))}
+        </DataTable>
+      </Panel>
+    </>
   );
 }

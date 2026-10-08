@@ -1,68 +1,51 @@
-import { listPayments, listReceivables } from '../api/payments.api';
+import { HandCoins } from 'lucide-react';
+import { getSales, recordPayment } from '../api/erp.api';
 import useFetch from '../hooks/useFetch';
-import useAction from '../hooks/useAction';
-import useSaleActions from '../hooks/useSaleActions';
-import DataTable from '../components/common/DataTable';
-import StatusBadge from '../components/common/StatusBadge';
-import Message from '../components/common/Message';
+import { Alert, Badge, DataTable, PageHeader, Panel } from '../components/common/ui';
 import { useModal } from '../components/common/Modal';
-import { formatDateTime, formatINR } from '../utils/format';
+import { fmt } from '../utils/format';
 
 export default function Payments() {
-  const data = useFetch(async () => {
-    const [receivables, payments] = await Promise.all([listReceivables(), listPayments()]);
-    return { receivables, payments };
-  });
-  const { message, setMessage, run } = useAction();
+  const { data, reload, error } = useFetch(getSales);
   const modal = useModal();
-  const actions = useSaleActions({ modal, run, onDone: () => data.reload({ silent: true }) });
-  const totalDue = (data.data?.receivables || []).reduce((sum, s) => sum + s.Balance, 0);
+  const pending = (data || []).filter((s) => s.PaymentStatus !== 'Paid' && s.OrderStatus !== 'Cancelled');
+
+  const collect = async (s, balance) => {
+    const amt = await modal.prompt(`Amount received (balance: ${fmt(balance)})`, { title: `Collect payment · ${s.SaleID}`, type: 'number', defaultValue: balance, min: 0, confirmText: 'Record payment' });
+    if (!amt) return;
+    try {
+      const result = await recordPayment({ saleID: s.SaleID, amount: amt, mode: 'Cash', notes: 'Balance payment' });
+      reload();
+      if (result && result.paymentStatus === 'Paid') modal.alert('Full payment received. Order is now Ready for Pickup.', { title: 'Payment complete' });
+    } catch (e) {
+      modal.alert(`Error: ${e.message}`);
+    }
+  };
 
   return (
-    <div className="page">
-      <div className="page-header"><h1>Payments</h1></div>
-      <Message message={message || (data.error && { type: 'error', text: data.error })} onClose={() => setMessage(null)} />
-
-      <section className="card">
-        <h2>Money due from buyers · {formatINR(totalDue)}</h2>
-        <DataTable
-          rowKey="SaleID"
-          rows={data.data?.receivables}
-          loading={data.loading}
-          empty="Nothing due. All sales are paid."
-          columns={[
-            { key: 'SaleID', label: 'Sale' },
-            { key: 'Date', label: 'Date', render: (s) => formatDateTime(s.Date) },
-            { key: 'ItemName', label: 'Item' },
-            { key: 'BuyerName', label: 'Buyer' },
-            { key: 'SalePrice', label: 'Total', align: 'right', render: (s) => formatINR(s.SalePrice) },
-            { key: 'ReceivedAmount', label: 'Received', align: 'right', render: (s) => formatINR(s.ReceivedAmount) },
-            { key: 'Balance', label: 'Balance', align: 'right', render: (s) => <strong>{formatINR(s.Balance)}</strong> },
-            { key: 'PaymentStatus', label: 'Status', render: (s) => <StatusBadge status={s.PaymentStatus} /> },
-            { key: 'actions', label: '', render: (s) => actions.canCollect(s) && <button className="btn btn-small" onClick={() => actions.collect(s)}>Collect</button> },
-          ]}
-        />
-      </section>
-
-      <section className="card">
-        <h2>Payment history</h2>
-        <DataTable
-          rowKey="PaymentID"
-          rows={data.data?.payments}
-          loading={data.loading}
-          empty="No payments yet."
-          columns={[
-            { key: 'PaymentID', label: 'Payment' },
-            { key: 'Date', label: 'Date', render: (p) => formatDateTime(p.Date) },
-            { key: 'SaleID', label: 'Sale' },
-            { key: 'BuyerName', label: 'Buyer' },
-            { key: 'Amount', label: 'Amount', align: 'right', render: (p) => formatINR(p.Amount) },
-            { key: 'Mode', label: 'Mode' },
-            { key: 'Notes', label: 'Notes' },
-            { key: 'Status', label: 'Status', render: (p) => <StatusBadge status={p.Status} /> },
-          ]}
-        />
-      </section>
-    </div>
+    <>
+      <PageHeader title="Payment Collection" subtitle="Sales with money still to collect from the buyer." />
+      <Alert msg={error && { err: true, text: error }} />
+      <Panel flush>
+        <DataTable rows={data ? pending.length : -1} empty="No pending payments 🎉"
+          head={['Sale ID', 'Buyer', 'Qty', 'Total ₹', 'Received ₹', 'Balance ₹', 'Status', '']}>
+          {pending.map((s) => {
+            const balance = Number(s.SalePrice) - Number(s.ReceivedAmount);
+            return (
+              <tr key={s.SaleID}>
+                <td className="id-cell">{s.SaleID}</td>
+                <td className="item-cell">{s.BuyerName || '-'}</td>
+                <td>{s.Quantity || 1}</td>
+                <td>{fmt(s.SalePrice)}</td>
+                <td>{fmt(s.ReceivedAmount)}</td>
+                <td className="strong">{fmt(balance)}</td>
+                <td><Badge>{s.PaymentStatus}</Badge></td>
+                <td><button className="btn btn-sm btn-soft-green" onClick={() => collect(s, balance)}><HandCoins size={14} />Collect</button></td>
+              </tr>
+            );
+          })}
+        </DataTable>
+      </Panel>
+    </>
   );
 }

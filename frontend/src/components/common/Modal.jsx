@@ -2,10 +2,12 @@
 //
 //   const modal = useModal();
 //   if (await modal.confirm('Archive this product?')) { ... }
+//   await modal.alert('Settings saved');
 //   const reason = await modal.prompt('Reason for cancelling?');          // null if cancelled
 //   const values = await modal.form({ title, fields: [{ name, label, type, defaultValue, options }] });
 //
 // <Modal open title onClose> ... </Modal> is also available for custom content.
+import { X } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 const ModalContext = createContext(null);
@@ -24,7 +26,7 @@ export default function Modal({ open, title, onClose, children, wide = false }) 
       <div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-header">
           <h3>{title}</h3>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
         <div className="modal-body">{children}</div>
       </div>
@@ -77,7 +79,7 @@ function FormDialog({ dialog, close }) {
           {f.hint && <small className="hint">{f.hint}</small>}
         </label>
       ))}
-      {error && <div className="message message-error">{error}</div>}
+      {error && <div className="alert alert-error">{error}</div>}
       <div className="modal-actions">
         <button type="button" className="btn btn-secondary" onClick={() => close(null)}>Cancel</button>
         <button type="submit" className={`btn ${dialog.danger ? 'btn-danger' : 'btn-primary'}`}>{dialog.confirmText || 'OK'}</button>
@@ -104,6 +106,7 @@ export function ModalProvider({ children }) {
         fields: [{ name: 'value', label: opts.label || '', type: opts.type || 'text', defaultValue: opts.defaultValue ?? '', min: opts.min, max: opts.max, step: opts.step }],
       }).then((r) => (r ? r.value : null)),
     form: (opts) => open({ kind: 'form', ...opts }),
+    alert: (message, opts = {}) => open({ kind: 'alert', title: opts.title || 'HR Warehouse', message }),
   }), [open]);
 
   const close = (result) => {
@@ -115,8 +118,15 @@ export function ModalProvider({ children }) {
     <ModalContext.Provider value={api}>
       {children}
       {dialog && (
-        <Modal open title={dialog.title} onClose={() => close(dialog.kind === 'confirm' ? false : null)}>
-          {dialog.kind === 'confirm' ? (
+        <Modal open title={dialog.title} onClose={() => close(dialog.kind === 'form' ? null : false)}>
+          {dialog.kind === 'alert' ? (
+            <>
+              <p className="modal-message">{dialog.message}</p>
+              <div className="modal-actions">
+                <button type="button" className="btn btn-primary" onClick={() => close(true)} autoFocus>OK</button>
+              </div>
+            </>
+          ) : dialog.kind === 'confirm' ? (
             <>
               <p className="modal-message">{dialog.message}</p>
               <div className="modal-actions">

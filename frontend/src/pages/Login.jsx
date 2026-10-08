@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Boxes, ReceiptText, TrendingUp, Warehouse } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
@@ -28,21 +29,39 @@ export default function Login() {
   };
 
   return (
-    <div className="login-page">
-      <form className="login-card" onSubmit={submit}>
-        <h1>HR Warehouse ERP</h1>
-        <p className="muted">Sign in to continue</p>
-        <label className="field">
-          <span>Username</span>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
-        </label>
-        <label className="field">
-          <span>Password</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        </label>
-        {error && <div className="message message-error">{error}</div>}
-        <button className="btn btn-primary btn-block" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
+    <div className="auth">
+      <div className="auth-hero">
+        <div className="brand" style={{ padding: 0 }}>
+          <div className="brand-mark"><Warehouse size={20} /></div>
+          <div><div className="brand-name">HR Warehouse</div><div className="brand-sub">ERP 2.4</div></div>
+        </div>
+        <div>
+          <h2>Run your warehouse from one place.</h2>
+          <p>Stock, sales, payments, seller settlements and storage billing, all in sync.</p>
+          <div className="auth-points">
+            <div><Boxes size={18} /> Live stock and space tracking</div>
+            <div><ReceiptText size={18} /> Billing with commission worked out for you</div>
+            <div><TrendingUp size={18} /> Revenue, expenses and profit at a glance</div>
+          </div>
+        </div>
+        <div className="brand-sub">© HR Warehouse</div>
+      </div>
+      <div className="auth-form-side">
+        <form className="auth-card" onSubmit={submit}>
+          <h1>Welcome back</h1>
+          <p className="muted">Sign in to your admin account</p>
+          {error && <div className="alert alert-error">{error}</div>}
+          <div className="field">
+            <label htmlFor="u">Username</label>
+            <input id="u" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
+          </div>
+          <div className="field">
+            <label htmlFor="p">Password</label>
+            <input id="p" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+          </div>
+          <button className="btn btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+      </div>
     </div>
   );
 }

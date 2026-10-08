@@ -22,21 +22,9 @@ All four services have free plans that are enough for this project.
 
 ---
 
-## Step 1: Put the code in your repo
+## Step 1: Put the code in your repo ✅ (done)
 
-1. Unzip `hr-warehouse-erp.zip`.
-2. Copy everything inside it into your cloned `hr-warehouse-erp` folder (replace files if asked).
-3. Commit and push it on a feature branch, then open a Pull Request into `develop`:
-
-```bash
-cd hr-warehouse-erp
-git checkout develop
-git checkout -b feature/mern-port
-git add .
-git status            # make sure NO .env file is listed
-git commit -m "feat: full MERN port of HR Warehouse ERP"
-git push -u origin feature/mern-port
-```
+The code is committed and pushed to `main`. This project uses **only the `main` branch**: commit and push straight to it.
 
 ---
 
@@ -168,8 +156,6 @@ New IDs continue from the imported ones. If the last seller was SEL-0042, the ne
 
 ## Step 7: Go live (Render + Vercel)
 
-Do this from the `main` branch: merge `feature → develop → main` with Pull Requests first.
-
 ### 7a. Backend on Render
 
 1. Sign up at **render.com** with your GitHub account. Allow access to the `hr-warehouse-erp` repo.
@@ -214,7 +200,7 @@ Do this from the `main` branch: merge `feature → develop → main` with Pull R
    ```json
    { "source": "/api/:path*", "destination": "https://hr-warehouse-api.onrender.com/api/:path*" }
    ```
-   Commit and push this change (it has to reach `main`).
+   Commit and push this change to `main`.
 2. Sign up at **vercel.com** with GitHub → **Add New → Project** → import `hr-warehouse-erp`.
 3. Settings:
 
@@ -235,9 +221,8 @@ Do this from the `main` branch: merge `feature → develop → main` with Pull R
 
 ### 7c. After that: deploying changes (CD)
 
-- Open a Pull Request (`feature/... → develop`). **GitHub Actions CI** (`.github/workflows/ci.yml`) runs tests, lint and build automatically.
-- Merge `develop → main`. **Render and Vercel deploy automatically** from `main`. Nothing else to do.
-- Optional: in Vercel, preview deployments for `develop` give you a test link before going live.
+- Commit and push to `main`. **Render and Vercel deploy automatically.** Nothing else to do.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs tests, lint and build on every push, so you'll see a ✅ or ❌ next to each commit on GitHub.
 
 ---
 
@@ -286,17 +271,13 @@ GitHub Secrets are **not needed**: CI uses a throwaway test database, and Render
 
 ---
 
-## Things to confirm against the old system
+## Checked against the old system
 
-The port follows the handoff notes exactly. A few small details were not covered by the notes, so I picked the most likely behaviour. If you re-share `flow_code.txt` and `html.txt`, these can be checked line by line:
+The code was compared line by line with the original `flow_code.txt` (Apps Script) and `html.txt` (screen). Every screen, field, button, rule, calculation and error message now follows the original. The only differences are the ones the move to a website needs:
 
-1. **Edit seller / edit buyer** buttons exist (name, phone, email, address, GSTIN, KYC).
-2. **KYC status** choices are Pending / Verified / Rejected.
-3. **Payment modes** are Cash / UPI / Bank Transfer / Card / Cheque.
-4. **Archiving a seller** is blocked if *any* product was ever linked to them (including sold or archived ones).
-5. **Adjust quantity** is not allowed on Sold or Archived products.
-6. **Storage billing** skips a product when its new charge rounds to ₹0. Those days are billed on the next run, so nothing is lost.
-7. **Dead stock** lists only products that still have available units.
-8. **Dashboard "Items in stock"** = total available units (not counting reserved).
-
-Known quirks of the old system were **kept on purpose** (seller credited at reservation, rent can make payable negative, flat commission, "Listed" is just a label, `StorageCharge` always 0, billing accrues up to "now").
+1. **Login.** One admin login (the old version ran inside Google). "Close / Exit" signs out.
+2. **Database.** MongoDB instead of Sheets. Each save is one transaction, which does the job of the old lock and manual rollback.
+3. **Media.** Photos and videos go to Cloudinary instead of Google Drive, in the same folder layout and file names (`Product_Name_001`).
+4. **Popups.** The browser's prompt / confirm / alert boxes became in-page popups with the same wording.
+5. **Phones and tablets.** The same look and colours, plus a slide-in menu and tables that scroll sideways on small screens.
+6. **Health check.** "Missing column" checks are gone because a database has no columns to lose; duplicate-ID and quantity checks are the same.

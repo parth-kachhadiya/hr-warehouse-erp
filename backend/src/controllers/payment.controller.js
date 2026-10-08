@@ -4,6 +4,5 @@ const { send } = require('./respond');
 
 module.exports = {
   list: async (req, res) => send(res, await service.listPayments()),
-  receivables: async (req, res) => send(res, await service.listReceivables()),
-  create: async (req, res) => send(res, await sales.recordPayment(req.body.SaleID, req.body), 201),
+  create: async (req, res) => send(res, await sales.recordPayment(req.body), 201),
 };

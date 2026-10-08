@@ -1,25 +1,54 @@
-export const NAV_ITEMS = [
-  { path: '/', label: 'Dashboard' },
-  { path: '/add-product', label: 'Add Product' },
-  { path: '/stock', label: 'Stock' },
-  { path: '/sellers', label: 'Sellers' },
-  { path: '/buyers', label: 'Buyers' },
-  { path: '/billing', label: 'Sell / Billing' },
-  { path: '/sales', label: 'Sales / Orders' },
-  { path: '/payments', label: 'Payments' },
-  { path: '/settlements', label: 'Settlements' },
-  { path: '/storage-billing', label: 'Storage Billing' },
-  { path: '/dead-stock', label: 'Dead Stock' },
-  { path: '/finance', label: 'Finance' },
-  { path: '/system', label: 'System Management' },
-  { path: '/settings', label: 'Settings' },
-  { path: '/audit', label: 'Audit Log' },
+import {
+  Boxes, CalendarClock, ClipboardList, Hourglass, Landmark, LayoutDashboard, PackagePlus,
+  ReceiptText, ScrollText, Settings, SlidersHorizontal, Store, TrendingUp, UserRound, Wallet,
+} from 'lucide-react';
+
+// Same 15 screens as the old system, grouped so the menu is easier to scan.
+export const NAV_GROUPS = [
+  { title: 'Overview', items: [{ path: '/', label: 'Dashboard', icon: LayoutDashboard }] },
+  {
+    title: 'Inventory',
+    items: [
+      { path: '/add-product', label: 'Add Product', icon: PackagePlus },
+      { path: '/stock', label: 'Stock', icon: Boxes },
+      { path: '/dead-stock', label: 'Dead Stock', icon: Hourglass },
+    ],
+  },
+  {
+    title: 'Sales',
+    items: [
+      { path: '/billing', label: 'Sell / Billing', icon: ReceiptText },
+      { path: '/sales', label: 'Sales / Orders', icon: ClipboardList },
+      { path: '/payments', label: 'Payments', icon: Wallet },
+    ],
+  },
+  {
+    title: 'People',
+    items: [
+      { path: '/sellers', label: 'Sellers', icon: Store },
+      { path: '/buyers', label: 'Buyers', icon: UserRound },
+      { path: '/settlements', label: 'Settlements', icon: Landmark },
+    ],
+  },
+  {
+    title: 'Finance',
+    items: [
+      { path: '/storage-billing', label: 'Storage Billing', icon: CalendarClock },
+      { path: '/finance', label: 'Finance', icon: TrendingUp },
+    ],
+  },
+  {
+    title: 'System',
+    items: [
+      { path: '/system', label: 'System Management', icon: SlidersHorizontal },
+      { path: '/settings', label: 'Settings', icon: Settings },
+      { path: '/audit', label: 'Audit Log', icon: ScrollText },
+    ],
+  },
 ];
 
+export const NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items);
+
 export const CONDITION_GRADES = ['A', 'B', 'C', 'D', 'E'];
-export const ASSET_STATUSES = ['In Stock', 'Listed', 'Damaged', 'Sold', 'Archived'];
-export const MANUAL_ASSET_STATUSES = ['In Stock', 'Listed', 'Damaged'];
-export const ORDER_STATUSES = ['Reserved', 'Ready for Pickup', 'Partially Delivered', 'Delivered', 'Cancelled'];
-export const PAYMENT_MODES = ['Cash', 'UPI', 'Bank Transfer', 'Card', 'Cheque'];
-export const KYC_STATUSES = ['Pending', 'Verified', 'Rejected'];
+export const STOCK_STATUS_OPTIONS = ['In Stock', 'Listed', 'Damaged'];
 export const EXPENSE_CATEGORIES = ['Rent', 'Staff', 'Utilities', 'Marketing', 'Insurance', 'Other'];
