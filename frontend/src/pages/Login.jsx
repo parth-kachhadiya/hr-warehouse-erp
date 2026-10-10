@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Boxes, ReceiptText, TrendingUp, Warehouse } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import useServerWake from '../hooks/useServerWake';
+import ServerWake from '../components/auth/ServerWake';
 
 export default function Login() {
   const { status, login } = useAuth();
@@ -11,6 +13,12 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const server = useServerWake();
+  const serverUp = server.state === 'up';
+
+  useEffect(() => {
+    if (serverUp) document.getElementById('u')?.focus();
+  }, [serverUp]);
 
   if (status === 'in') return <Navigate to="/" replace />;
 
@@ -29,7 +37,9 @@ export default function Login() {
   };
 
   return (
-    <div className="auth">
+    <>
+    <ServerWake {...server} />
+    <div className="auth" inert={!serverUp}>
       <div className="auth-hero">
         <div className="brand" style={{ padding: 0 }}>
           <div className="brand-mark"><Warehouse size={20} /></div>
@@ -53,15 +63,16 @@ export default function Login() {
           {error && <div className="alert alert-error">{error}</div>}
           <div className="field">
             <label htmlFor="u">Username</label>
-            <input id="u" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
+            <input id="u" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
           </div>
           <div className="field">
             <label htmlFor="p">Password</label>
             <input id="p" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
           </div>
-          <button className="btn btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          <button className="btn btn-primary" disabled={busy || !serverUp}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
       </div>
     </div>
+    </>
   );
 }
