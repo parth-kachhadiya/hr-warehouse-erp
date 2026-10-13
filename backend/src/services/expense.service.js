@@ -1,6 +1,6 @@
 // Expenses (same as getExpenses / addExpense / deleteExpense in the old script).
 const { Expense } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+const { nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { num, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
@@ -12,14 +12,14 @@ async function getExpenses() {
 }
 
 async function addExpense(e) {
+  if (!e) throw new AppError(400, 'Expense data missing.');
+  const amount = num(e.amount, 'Expense amount', { positive: true });
+  const [id, auditID] = await nextIds('EXP', 'AUD'); // both IDs in one round trip
   return withTransaction(async (session) => {
-    if (!e) throw new AppError(400, 'Expense data missing.');
-    const amount = num(e.amount, 'Expense amount', { positive: true });
-    const id = await nextId('EXP', session);
     await new Expense({
       ExpenseID: id, Date: new Date(), Category: text(e.category) || 'Other', Amount: amount, Notes: text(e.notes), Status: 'Active',
     }).save({ session });
-    await audit.log('EXPENSE_ADD', 'Expense', id, { amount, category: text(e.category) }, session);
+    await audit.log('EXPENSE_ADD', 'Expense', id, { amount, category: text(e.category) }, session, auditID);
     return id;
   });
 }

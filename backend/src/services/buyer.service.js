@@ -1,65 +1,69 @@
-// Buyers (same rules as getBuyers / addBuyer / updateBuyer / deleteBuyer in the old script).
-const { Buyer, Sale } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+// Sellers (same rules as getSellers / addSeller / updateSeller / deleteSeller in the old script).
+const { Seller, Asset, Sale } = require('../models');
+const { nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { text } = require('../utils/number');
 const AppError = require('../utils/AppError');
 const audit = require('./audit.service');
 
-async function listBuyers() {
-  return Buyer.find({ Active: true }).sort({ BuyerID: 1 }).lean();
+async function listSellers() {
+  return Seller.find({ Active: true }).sort({ SellerID: 1 }).lean();
 }
 
-async function createBuyer(input = {}) {
+async function createSeller(input = {}) {
+  if (!text(input.name)) throw new AppError(400, 'Seller name required.');
+  const [SellerID, auditID] = await nextIds('SEL', 'AUD'); // both IDs in one round trip
   return withTransaction(async (session) => {
-    if (!text(input.name)) throw new AppError(400, 'Buyer name required.');
-    const BuyerID = await nextId('BUY', session);
-    await new Buyer({
-      BuyerID,
+    await new Seller({
+      SellerID,
       Name: text(input.name),
       Phone: text(input.phone),
       Email: text(input.email),
       Address: text(input.address),
       GSTIN: text(input.gstin),
+      KYCStatus: text(input.kycStatus) || 'Pending',
       JoinDate: new Date(),
-      TotalPurchased: 0,
+      TotalPayable: 0,
+      TotalSettled: 0,
       Active: true,
     }).save({ session });
-    await audit.log('BUYER_ADD', 'Buyer', BuyerID, { name: text(input.name) }, session);
-    return BuyerID;
+    await audit.log('SELLER_ADD', 'Seller', SellerID, { name: text(input.name) }, session, auditID);
+    return SellerID;
   });
 }
 
-async function updateBuyer(buyerId, input = {}) {
+async function updateSeller(sellerId, input = {}) {
   return withTransaction(async (session) => {
-    const buyer = await Buyer.findOne({ BuyerID: buyerId }).session(session);
-    if (!buyer) throw new AppError(404, 'Buyer not found.');
-    Object.assign(buyer, {
+    const seller = await Seller.findOne({ SellerID: sellerId }).session(session);
+    if (!seller) throw new AppError(404, 'Seller not found.');
+    Object.assign(seller, {
       Name: text(input.name),
       Phone: text(input.phone),
       Email: text(input.email),
       Address: text(input.address),
       GSTIN: text(input.gstin),
+      KYCStatus: text(input.kycStatus) || 'Pending',
     });
-    await buyer.save({ session });
-    await audit.log('BUYER_UPDATE', 'Buyer', buyerId, {}, session);
+    await seller.save({ session });
+    await audit.log('SELLER_UPDATE', 'Seller', sellerId, {}, session);
     return true;
   });
 }
 
-async function deleteBuyer(buyerId) {
+async function deleteSeller(sellerId) {
   return withTransaction(async (session) => {
-    const buyer = await Buyer.findOne({ BuyerID: buyerId }).session(session);
-    if (!buyer) throw new AppError(404, 'Buyer not found.');
-    if (await Sale.exists({ BuyerID: buyerId }).session(session)) {
-      throw new AppError(400, 'Buyer has sale history and cannot be deleted. Archive instead.');
-    }
-    buyer.Active = false;
-    buyer.ArchivedAt = new Date();
-    await buyer.save({ session });
-    await audit.log('BUYER_ARCHIVE', 'Buyer', buyerId, {}, session);
+    const seller = await Seller.findOne({ SellerID: sellerId }).session(session);
+    if (!seller) throw new AppError(404, 'Seller not found.');
+    const hasAssets = await Asset.exists({ SellerID: sellerId, Status: { $ne: 'Archived' } }).session(session);
+    const assetIds = await Asset.distinct('AssetID', { SellerID: sellerId }).session(session);
+    const hasSales = assetIds.length ? await Sale.exists({ AssetID: { $in: assetIds } }).session(session) : null;
+    if (hasAssets || hasSales) throw new AppError(400, 'Seller has linked history. Archive seller only after all active stock is cleared.');
+    seller.Active = false;
+    seller.ArchivedAt = new Date();
+    await seller.save({ session });
+    await audit.log('SELLER_ARCHIVE', 'Seller', sellerId, {}, session);
     return true;
   });
 }
 
-module.exports = { listBuyers, createBuyer, updateBuyer, deleteBuyer };
+module.exports = { listSellers, createSeller, updateSeller, deleteSeller };

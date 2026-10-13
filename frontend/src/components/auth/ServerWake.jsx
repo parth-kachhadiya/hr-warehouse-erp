@@ -1,10 +1,10 @@
 // What the Login page shows while the backend wakes up:
 // - a full-screen loader that blocks the page until the server answers
-// - then a green popup with the server's reply, which hides itself after a few seconds
+// - then a green "Server is ready" popup, which hides itself after a few seconds
 import { useEffect, useState } from 'react';
 import { CheckCircle2, X } from 'lucide-react';
 
-export default function ServerWake({ state, seconds, response }) {
+export default function ServerWake({ state, seconds }) {
   const [showDone, setShowDone] = useState(true);
 
   useEffect(() => {
@@ -34,7 +34,6 @@ export default function ServerWake({ state, seconds, response }) {
       <div>
         <strong>Server is ready</strong>
         <div>You can sign in now.</div>
-        {response && <code>{JSON.stringify(response)}</code>}
       </div>
       <button type="button" className="wake-close" onClick={() => setShowDone(false)} aria-label="Close"><X size={16} /></button>
     </div>

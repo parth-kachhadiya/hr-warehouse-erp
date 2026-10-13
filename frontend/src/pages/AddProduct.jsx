@@ -3,6 +3,7 @@ import { Save } from 'lucide-react';
 import { addAsset, getCategories, getCustomFields, getSellers, uploadAssetMediaForAsset } from '../api/erp.api';
 import { Alert, Field, PageHeader, Panel } from '../components/common/ui';
 import { CONDITION_GRADES } from '../utils/constants';
+import { runLimited, shrinkPhoto } from '../utils/media';
 
 const EMPTY = { itemName: '', category: '', conditionGrade: 'C', sellerID: '', quantity: '1', spaceSqFt: '', reservePrice: '', listedPrice: '', notes: '' };
 
@@ -50,26 +51,29 @@ export default function AddProduct() {
     }
 
     setProgress('Product saved. Uploading media...');
-    const uploaded = [];
-    try {
-      for (const file of Array.from(photosRef.current.files)) {
-        const r = await uploadAssetMediaForAsset(assetID, file);
-        uploaded.push(r.fileName);
-        setProgress(`Uploaded ${uploaded.length} media file(s)...`);
-      }
-      const video = videoRef.current.files[0];
-      if (video) uploaded.push((await uploadAssetMediaForAsset(assetID, video)).fileName);
+    // Photos are shrunk first, then up to 3 files upload at the same time.
+    // The video (slowest) starts first so it isn't left waiting at the end.
+    const files = [...Array.from(videoRef.current.files).slice(0, 1), ...Array.from(photosRef.current.files)];
+    let done = 0;
+    const results = await runLimited(files, 3, async (file) => {
+      const r = await uploadAssetMediaForAsset(assetID, await shrinkPhoto(file));
+      done += 1;
+      setProgress(`Uploaded ${done} of ${files.length} media file(s)...`);
+      return r;
+    });
+    const uploaded = results.filter((r) => r.ok).map((r) => r.value.fileName);
+    const failed = results.find((r) => !r.ok);
+    if (failed) {
+      setMsg({ err: true, text: `Product ${assetID} saved, but some media upload failed: ${failed.error.message}. You can continue using the product.` });
+    } else {
       setMsg({ text: `Saved ${assetID} — Qty ${qty}. ${uploaded.length ? `Media: ${uploaded.join(', ')}` : 'No media uploaded.'}` });
       setF((cur) => ({ ...EMPTY, category: cur.category, conditionGrade: cur.conditionGrade, sellerID: cur.sellerID }));
       setCustom({});
       photosRef.current.value = '';
       videoRef.current.value = '';
-    } catch (err) {
-      setMsg({ err: true, text: `Product ${assetID} saved, but some media upload failed: ${err.message}. You can continue using the product.` });
-    } finally {
-      setBusy(false);
-      setProgress('');
     }
+    setBusy(false);
+    setProgress('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 

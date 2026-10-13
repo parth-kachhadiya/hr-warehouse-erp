@@ -1,7 +1,7 @@
 // Products (same rules as getAssets / addAsset / updateAsset / adjustAssetQuantity /
 // setAssetStatus / deleteAsset in the old script).
 const { Asset, Seller } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+const { nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { num, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
@@ -15,32 +15,33 @@ async function getAssets() {
   return Asset.find({ Status: { $ne: 'Archived' } }).sort({ AssetID: 1 }).lean();
 }
 
+// Speed: the checks read the database at the same time, the new IDs are taken in one
+// round trip, and only the three writes run inside the transaction.
 async function addAsset(a = {}) {
+  if (!text(a.itemName)) throw new AppError(400, 'Item name required.');
+  const qty = Math.floor(num(a.quantity, 'Quantity', { positive: true }));
+  if (qty < 1) throw new AppError(400, 'Quantity must be at least 1.');
+  const unitSpace = num(a.spaceSqFt, 'Space per unit', { positive: true });
+  const reserve = a.reservePrice === '' || a.reservePrice == null ? 0 : num(a.reservePrice, 'Reserve price per unit', { nonnegative: true });
+  const listed = a.listedPrice === '' || a.listedPrice == null ? 0 : num(a.listedPrice, 'Listed price per unit', { nonnegative: true });
+
+  const [seller, settings, wh] = await Promise.all([
+    a.sellerID ? Seller.findOne({ SellerID: a.sellerID, Active: true }).lean() : null,
+    getSettings(),
+    inventory.getWarehouseUtilization(),
+  ]);
+  if (a.sellerID && !seller) throw new AppError(400, 'Selected seller is not active.');
+  const sellerName = seller ? seller.Name : '';
+
+  const requiredSpace = unitSpace * qty;
+  if (settings.EnforceWarehouseCapacity) {
+    if (wh.capacity > 0 && wh.used + requiredSpace > wh.capacity) {
+      throw new AppError(400, `Warehouse capacity exceeded. Available: ${wh.available} sq.ft, required: ${requiredSpace} sq.ft for ${qty} unit(s).`);
+    }
+  }
+
+  const [id, movementID, auditID] = await nextIds('AST', 'MOV', 'AUD');
   return withTransaction(async (session) => {
-    if (!text(a.itemName)) throw new AppError(400, 'Item name required.');
-    const qty = Math.floor(num(a.quantity, 'Quantity', { positive: true }));
-    if (qty < 1) throw new AppError(400, 'Quantity must be at least 1.');
-    const unitSpace = num(a.spaceSqFt, 'Space per unit', { positive: true });
-    const reserve = a.reservePrice === '' || a.reservePrice == null ? 0 : num(a.reservePrice, 'Reserve price per unit', { nonnegative: true });
-    const listed = a.listedPrice === '' || a.listedPrice == null ? 0 : num(a.listedPrice, 'Listed price per unit', { nonnegative: true });
-
-    let sellerName = '';
-    if (a.sellerID) {
-      const seller = await Seller.findOne({ SellerID: a.sellerID, Active: true }).session(session);
-      if (!seller) throw new AppError(400, 'Selected seller is not active.');
-      sellerName = seller.Name;
-    }
-
-    const requiredSpace = unitSpace * qty;
-    const settings = await getSettings(session);
-    if (settings.EnforceWarehouseCapacity) {
-      const wh = await inventory.getWarehouseUtilization(session);
-      if (wh.capacity > 0 && wh.used + requiredSpace > wh.capacity) {
-        throw new AppError(400, `Warehouse capacity exceeded. Available: ${wh.available} sq.ft, required: ${requiredSpace} sq.ft for ${qty} unit(s).`);
-      }
-    }
-
-    const id = await nextId('AST', session);
     await new Asset({
       AssetID: id,
       ItemName: text(a.itemName),
@@ -61,10 +62,10 @@ async function addAsset(a = {}) {
       Notes: text(a.notes),
       CustomFieldsData: a.customFields && typeof a.customFields === 'object' ? a.customFields : {},
     }).save({ session });
-    await inventory.recordMovement(id, text(a.sellerID), 'RECEIPT', qty, qty, 0, 0, 0, '', 'Product intake', null, session);
+    await inventory.recordMovement(id, text(a.sellerID), 'RECEIPT', qty, qty, 0, 0, 0, '', 'Product intake', null, session, movementID);
     await audit.log('ASSET_ADD', 'Asset', id, {
       item: text(a.itemName), sellerID: text(a.sellerID), quantity: qty, unitSpace, totalSpace: requiredSpace,
-    }, session);
+    }, session, auditID);
     return id;
   });
 }
@@ -105,8 +106,9 @@ async function adjustAssetQuantity(assetID, newTotalQty, reasonInput) {
     const oldAvail = Math.floor(Number(a.QuantityAvailable) || 0);
     if (delta < 0 && oldAvail < Math.abs(delta)) throw new AppError(400, 'Not enough available quantity to reduce.');
 
-    if (delta > 0 && (await getSettings(session)).EnforceWarehouseCapacity) {
-      const wh = await inventory.getWarehouseUtilization(session);
+    const settings = delta > 0 ? await getSettings(session) : null;
+    if (settings && settings.EnforceWarehouseCapacity) {
+      const wh = await inventory.getWarehouseUtilization(session, settings);
       const extra = (Number(a.SpaceSqFt) || 0) * delta;
       if (wh.capacity > 0 && wh.used + extra > wh.capacity) throw new AppError(400, 'Warehouse capacity exceeded by quantity adjustment.');
     }

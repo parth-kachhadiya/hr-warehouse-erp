@@ -3,7 +3,7 @@
 // markOrderDelivered / voidSale in the old script). Each runs in one transaction,
 // which replaces the old LockService + manual rollback.
 const { Asset, Buyer, Seller, Sale, Payment, Reversal } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+const { nextId, nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { num, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
@@ -33,48 +33,64 @@ async function getSales() {
   return Sale.find({ TransactionStatus: { $ne: 'Void' } }).sort({ Date: 1, SaleID: 1 }).lean();
 }
 
+// Speed: the product, settings and buyer are read at the same time, the new IDs are taken
+// in one round trip, and only the writes run inside the transaction. The stock change is
+// conditional, so two sales at the same moment can never reserve more than is available.
 async function createSale(sale) {
+  if (!sale) throw new AppError(400, 'Sale data missing.');
+  const [asset, settings, buyer] = await Promise.all([
+    Asset.findOne({ AssetID: sale.assetID }).lean(),
+    getSettings(),
+    sale.buyerID ? Buyer.findOne({ BuyerID: sale.buyerID, Active: true }).lean() : null,
+  ]);
+  if (!asset) throw new AppError(404, 'Asset not found.');
+  if (!ACTIVE_ASSET_STATUSES.includes(asset.Status)) {
+    throw new AppError(400, `Only In Stock or Listed products can be sold. Current status: ${asset.Status}.`);
+  }
+
+  const qty = Math.floor(num(sale.quantity, 'Quantity', { positive: true }));
+  const available = Math.floor(Number(asset.QuantityAvailable) || 0);
+  if (qty > available) throw new AppError(400, `Only ${available} unit(s) are available for this product.`);
+
+  const unitPrice = num(sale.unitSalePrice, 'Unit sale price', { positive: true });
+  const price = qty * unitPrice;
+  const marketing = num(sale.marketingCharge || 0, 'Marketing charge', { nonnegative: true });
+  const repair = num(sale.repairCharge || 0, 'Repair charge', { nonnegative: true });
+  const logistics = num(sale.logisticsCharge || 0, 'Logistics charge', { nonnegative: true });
+  const received = num(sale.receivedAmount || 0, 'Received amount', { nonnegative: true });
+  if (received > price) throw new AppError(400, 'Received amount cannot exceed total sale price.');
+
+  const reserve = Number(asset.ReservePrice) || 0;
+  if (reserve > 0 && unitPrice < reserve && settings.RequireReservePriceApproval && sale.managerOverride !== true) {
+    throw new AppError(400, `Unit sale price is below reserve price ${reserve}. Confirm manager override to continue.`);
+  }
+
+  if (sale.buyerID && !buyer) throw new AppError(400, 'Buyer is not active.');
+  const buyerName = buyer ? buyer.Name : '';
+
+  const commission = calcCommission(price, settings);
+  const hrRevenue = commission.amount + marketing + repair + logistics;
+  const sellerPayable = price - hrRevenue;
+  if (sellerPayable < 0) throw new AppError(400, 'Charges exceed sale price.');
+
+  const paymentStatus = received >= price ? 'Paid' : received > 0 ? 'Partial' : 'Unpaid';
+  const orderStatus = paymentStatus === 'Paid' ? 'Ready for Pickup' : 'Reserved';
+  const [saleID, movementID, auditID, paymentID] = await nextIds('SAL', 'MOV', 'AUD', ...(received > 0 ? ['PAY'] : []));
+
   return withTransaction(async (session) => {
-    if (!sale) throw new AppError(400, 'Sale data missing.');
-    const asset = await Asset.findOne({ AssetID: sale.assetID }).session(session);
-    if (!asset) throw new AppError(404, 'Asset not found.');
-    if (!ACTIVE_ASSET_STATUSES.includes(asset.Status)) {
-      throw new AppError(400, `Only In Stock or Listed products can be sold. Current status: ${asset.Status}.`);
+    const reserved = await Asset.updateOne(
+      { AssetID: asset.AssetID, Status: { $in: ACTIVE_ASSET_STATUSES }, QuantityAvailable: { $gte: qty } },
+      { $inc: { QuantityAvailable: -qty, QuantityReserved: qty } },
+      { session }
+    );
+    if (!reserved.matchedCount) {
+      // Someone else changed this product a moment ago: report what is left now.
+      const now = await Asset.findOne({ AssetID: asset.AssetID }).session(session).lean();
+      if (now && !ACTIVE_ASSET_STATUSES.includes(now.Status)) {
+        throw new AppError(400, `Only In Stock or Listed products can be sold. Current status: ${now.Status}.`);
+      }
+      throw new AppError(400, `Only ${Math.floor(Number(now && now.QuantityAvailable) || 0)} unit(s) are available for this product.`);
     }
-
-    const qty = Math.floor(num(sale.quantity, 'Quantity', { positive: true }));
-    const available = Math.floor(Number(asset.QuantityAvailable) || 0);
-    if (qty > available) throw new AppError(400, `Only ${available} unit(s) are available for this product.`);
-
-    const unitPrice = num(sale.unitSalePrice, 'Unit sale price', { positive: true });
-    const price = qty * unitPrice;
-    const marketing = num(sale.marketingCharge || 0, 'Marketing charge', { nonnegative: true });
-    const repair = num(sale.repairCharge || 0, 'Repair charge', { nonnegative: true });
-    const logistics = num(sale.logisticsCharge || 0, 'Logistics charge', { nonnegative: true });
-    const received = num(sale.receivedAmount || 0, 'Received amount', { nonnegative: true });
-    if (received > price) throw new AppError(400, 'Received amount cannot exceed total sale price.');
-
-    const reserve = Number(asset.ReservePrice) || 0;
-    const settings = await getSettings(session);
-    if (reserve > 0 && unitPrice < reserve && settings.RequireReservePriceApproval && sale.managerOverride !== true) {
-      throw new AppError(400, `Unit sale price is below reserve price ${reserve}. Confirm manager override to continue.`);
-    }
-
-    let buyerName = '';
-    if (sale.buyerID) {
-      const buyer = await Buyer.findOne({ BuyerID: sale.buyerID, Active: true }).session(session);
-      if (!buyer) throw new AppError(400, 'Buyer is not active.');
-      buyerName = buyer.Name;
-    }
-
-    const commission = calcCommission(price, settings);
-    const hrRevenue = commission.amount + marketing + repair + logistics;
-    const sellerPayable = price - hrRevenue;
-    if (sellerPayable < 0) throw new AppError(400, 'Charges exceed sale price.');
-
-    const paymentStatus = received >= price ? 'Paid' : received > 0 ? 'Partial' : 'Unpaid';
-    const orderStatus = paymentStatus === 'Paid' ? 'Ready for Pickup' : 'Reserved';
-    const saleID = await nextId('SAL', session);
 
     await new Sale({
       SaleID: saleID, Date: new Date(), AssetID: asset.AssetID, ItemName: asset.ItemName,
@@ -89,16 +105,13 @@ async function createSale(sale) {
 
     if (received > 0) {
       await new Payment({
-        PaymentID: await nextId('PAY', session), Date: new Date(), SaleID: saleID,
+        PaymentID: paymentID, Date: new Date(), SaleID: saleID,
         BuyerID: text(sale.buyerID), BuyerName: buyerName, Amount: received,
         Mode: text(sale.paymentMode) || 'Cash', Notes: 'Initial payment / token at billing', Status: 'Active',
       }).save({ session });
     }
 
-    asset.QuantityAvailable -= qty;
-    asset.QuantityReserved += qty;
-    await asset.save({ session });
-    await inventory.recordMovement(asset.AssetID, asset.SellerID, 'RESERVE', 0, -qty, qty, 0, 0, saleID, 'Reserved for sale', null, session);
+    await inventory.recordMovement(asset.AssetID, asset.SellerID, 'RESERVE', 0, -qty, qty, 0, 0, saleID, 'Reserved for sale', null, session, movementID);
 
     if (asset.SellerID) await adjustSellerPayable(asset.SellerID, sellerPayable, session);
     if (sale.buyerID) await adjustBuyerTotal(sale.buyerID, price, session);
@@ -106,7 +119,7 @@ async function createSale(sale) {
     await audit.log('SALE_CREATE', 'Sale', saleID, {
       assetID: asset.AssetID, quantity: qty, unitPrice, totalPrice: price,
       received, paymentStatus, orderStatus, sellerPayable, override: !!sale.managerOverride,
-    }, session);
+    }, session, auditID);
     return saleID;
   });
 }
@@ -141,17 +154,18 @@ async function recordPayment(p = {}) {
     sale.ReceivedAmount = newReceived;
     sale.PaymentStatus = paymentStatus;
     sale.OrderStatus = newOrderStatus;
-    await sale.save({ session });
+    // Saving the sale and taking the new IDs happen at the same time (one round trip).
+    const [, [paymentID, auditID]] = await Promise.all([sale.save({ session }), nextIds('PAY', 'AUD')]);
 
     await new Payment({
-      PaymentID: await nextId('PAY', session), Date: new Date(), SaleID: p.saleID,
+      PaymentID: paymentID, Date: new Date(), SaleID: p.saleID,
       BuyerID: sale.BuyerID, BuyerName: sale.BuyerName, Amount: amount,
       Mode: text(p.mode) || 'Cash', Notes: text(p.notes) || 'Balance payment', Status: 'Active',
     }).save({ session });
 
     await audit.log('PAYMENT_RECEIVE', 'Sale', p.saleID, {
       amount, totalReceived: newReceived, paymentStatus, orderStatus: newOrderStatus,
-    }, session);
+    }, session, auditID);
     return { ok: true, paymentStatus, orderStatus: newOrderStatus, received: newReceived, balance: price - newReceived };
   });
 }

@@ -26,6 +26,7 @@ const assetSchema = new Schema(
     PhotoFileIds: { type: [String], default: [] },
     VideoLink: { type: String, default: '' },
     VideoFileId: { type: String, default: '' },
+    PhotoSeq: { type: Number }, // last photo number used (Product_Name_001, 002...); set on first upload
     CustomFieldsData: { type: Schema.Types.Mixed, default: {} },
     ArchivedAt: { type: Date, default: null },
   },

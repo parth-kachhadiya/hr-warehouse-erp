@@ -1,6 +1,6 @@
 // Sellers (same rules as getSellers / addSeller / updateSeller / deleteSeller in the old script).
 const { Seller, Asset, Sale } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+const { nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { text } = require('../utils/number');
 const AppError = require('../utils/AppError');
@@ -11,9 +11,9 @@ async function listSellers() {
 }
 
 async function createSeller(input = {}) {
+  if (!text(input.name)) throw new AppError(400, 'Seller name required.');
+  const [SellerID, auditID] = await nextIds('SEL', 'AUD'); // both IDs in one round trip
   return withTransaction(async (session) => {
-    if (!text(input.name)) throw new AppError(400, 'Seller name required.');
-    const SellerID = await nextId('SEL', session);
     await new Seller({
       SellerID,
       Name: text(input.name),
@@ -27,7 +27,7 @@ async function createSeller(input = {}) {
       TotalSettled: 0,
       Active: true,
     }).save({ session });
-    await audit.log('SELLER_ADD', 'Seller', SellerID, { name: text(input.name) }, session);
+    await audit.log('SELLER_ADD', 'Seller', SellerID, { name: text(input.name) }, session, auditID);
     return SellerID;
   });
 }

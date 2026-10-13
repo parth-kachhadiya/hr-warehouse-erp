@@ -2,8 +2,9 @@
 const { AuditLog } = require('../models');
 const { nextId } = require('../utils/idGenerator');
 
-async function log(action, entityType, entityId, details = {}, session) {
-  const AuditID = await nextId('AUD', session);
+// Pass auditID when it was already taken with nextIds(), to save a database round trip.
+async function log(action, entityType, entityId, details = {}, session, auditID) {
+  const AuditID = auditID || (await nextId('AUD', session));
   await new AuditLog({
     AuditID,
     Timestamp: new Date(),

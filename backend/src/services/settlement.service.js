@@ -1,6 +1,6 @@
 // Seller settlements (same rules as paySeller / getSettlements in the old script).
 const { Seller, Settlement } = require('../models');
-const { nextId } = require('../utils/idGenerator');
+const { nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
 const { num, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
@@ -19,9 +19,10 @@ async function paySeller(p = {}) {
     if (amount > payable) throw new AppError(400, `Amount exceeds payable balance ${payable}.`);
     seller.TotalPayable = payable - amount;
     seller.TotalSettled = (Number(seller.TotalSettled) || 0) + amount;
-    await seller.save({ session });
+    // Saving the seller and taking the new IDs happen at the same time (one round trip).
+    const [, [settlementID, auditID]] = await Promise.all([seller.save({ session }), nextIds('STL', 'AUD')]);
     await new Settlement({
-      SettlementID: await nextId('STL', session),
+      SettlementID: settlementID,
       Date: new Date(),
       SellerID: p.sellerID,
       SellerName: seller.Name,
@@ -30,7 +31,7 @@ async function paySeller(p = {}) {
       Notes: text(p.notes),
       Status: 'Active',
     }).save({ session });
-    await audit.log('SELLER_SETTLEMENT', 'Seller', p.sellerID, { amount }, session);
+    await audit.log('SELLER_SETTLEMENT', 'Seller', p.sellerID, { amount }, session, auditID);
     return true;
   });
 }
