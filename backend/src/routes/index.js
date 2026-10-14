@@ -22,6 +22,7 @@ router.use('/settlements', require('./settlement.routes'));
 router.use('/storage', require('./storage.routes'));
 router.use('/expenses', require('./expense.routes'));
 router.use('/maintenance', require('./maintenance.routes'));
+router.use('/inquiries', require('./inquiry.routes'));
 router.use('/finance', require('./finance.routes'));
 router.use('/dashboard', require('./dashboard.routes'));
 router.use('/system', require('./system.routes'));

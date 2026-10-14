@@ -242,3 +242,22 @@ test('maintenance: repair cost goes on the price, not on the seller', async () =
     'This product was sold after the repair, so the repair cost was already charged. It cannot be voided.');
   assert.equal(ok(await agent.get('/api/maintenance')).length, 1);
 });
+
+test('inquiries: existing or new person, kept per type', async () => {
+  const buyerID = ok(await agent.post('/api/buyers').send({ name: 'Asha Shah', phone: '9825000000' }), 201);
+  await fail(agent.post('/api/inquiries').send({ type: 'Other', name: 'X', area: 'A', category: 'Other' }), 'Inquiry type must be Buyer or Seller.');
+  await fail(agent.post('/api/inquiries').send({ type: 'Buyer', name: 'X', category: 'Other' }), 'Area required.');
+  await fail(agent.post('/api/inquiries').send({ type: 'Buyer', name: 'X', area: 'Adajan', category: 'Other', mobile: 'abc' }), 'Mobile number is not valid.');
+  ok(await agent.post('/api/inquiries').send({ type: 'Buyer', personID: buyerID, name: 'ignored', area: 'Adajan', category: 'Other' }), 201);
+  const newID = ok(await agent.post('/api/inquiries').send({ type: 'Buyer', name: 'Walk-by Visitor', area: 'Varachha', category: 'Other', mobile: '98250 12345' }), 201);
+  ok(await agent.post('/api/inquiries').send({ type: 'Seller', name: 'Old Hotel', area: 'Katargam', category: 'Other' }), 201);
+
+  const buyers = ok(await agent.get('/api/inquiries?type=Buyer'));
+  assert.equal(buyers.length, 2);
+  assert.equal(buyers.find((q) => q.PersonID === buyerID).Name, 'Asha Shah');
+  assert.equal(ok(await agent.get('/api/inquiries?type=Seller')).length, 1);
+  assert.equal(await models.Buyer.countDocuments({ Name: 'Walk-by Visitor' }), 0, 'new names are not added to Buyers');
+
+  ok(await agent.delete(`/api/inquiries/${newID}`));
+  assert.equal(ok(await agent.get('/api/inquiries?type=Buyer')).length, 1);
+});

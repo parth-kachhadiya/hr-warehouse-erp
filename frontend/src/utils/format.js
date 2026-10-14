@@ -12,6 +12,14 @@ export function formatDateTime(value) {
   return Number.isNaN(d.getTime()) ? '-' : dateTimeFmt.format(d);
 }
 
+const dateFmt = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
+// Date only, for records where only the day is chosen (repairs, inquiries).
+export function formatDate(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? '-' : dateFmt.format(d);
+}
+
 export const safeUrl = (url) => {
   try {
     const u = new URL(String(url || ''));

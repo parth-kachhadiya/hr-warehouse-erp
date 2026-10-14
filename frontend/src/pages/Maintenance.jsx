@@ -4,7 +4,7 @@ import { addMaintenance, getAssets, getMaintenance, voidMaintenance } from '../a
 import useFetch from '../hooks/useFetch';
 import { Alert, DataTable, Field, PageHeader, Panel } from '../components/common/ui';
 import { useModal } from '../components/common/Modal';
-import { fmt, formatDateTime } from '../utils/format';
+import { fmt, formatDate } from '../utils/format';
 
 const REPAIRABLE = ['In Stock', 'Listed', 'Damaged'];
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // yyyy-mm-dd
@@ -94,7 +94,7 @@ export default function Maintenance() {
           {rows.map((m) => (
             <tr key={m.MaintenanceID}>
               <td className="id-cell">{m.MaintenanceID}</td>
-              <td>{formatDateTime(m.Date)}</td>
+              <td>{formatDate(m.Date)}</td>
               <td className="item-cell">{m.AssetID} · {m.ItemName}</td>
               <td className="wrap">{m.Description}</td>
               <td className="strong">{fmt(m.TotalCost)}</td>

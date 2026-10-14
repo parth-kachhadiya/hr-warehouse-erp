@@ -1,9 +1,9 @@
 import {
   Boxes, CalendarClock, ClipboardList, Hourglass, Landmark, LayoutDashboard, PackagePlus,
-  ReceiptText, ScrollText, Settings, SlidersHorizontal, Store, TrendingUp, UserRound, Wallet, Wrench,
+  MessageCircleQuestion, ReceiptText, ScrollText, Settings, SlidersHorizontal, Store, TrendingUp, UserRound, Wallet, Wrench,
 } from 'lucide-react';
 
-// The 15 screens of the old system plus Maintenance, grouped so the menu is easier to scan.
+// The 15 screens of the old system plus Maintenance and inquiries, grouped so the menu is easier to scan.
 export const NAV_GROUPS = [
   { title: 'Overview', items: [{ path: '/', label: 'Dashboard', icon: LayoutDashboard }] },
   {
@@ -28,6 +28,8 @@ export const NAV_GROUPS = [
     items: [
       { path: '/sellers', label: 'Sellers', icon: Store },
       { path: '/buyers', label: 'Buyers', icon: UserRound },
+      { path: '/buyer-inquiries', label: 'Buyer Inquiries', icon: MessageCircleQuestion },
+      { path: '/seller-inquiries', label: 'Seller Inquiries', icon: MessageCircleQuestion },
       { path: '/settlements', label: 'Settlements', icon: Landmark },
     ],
   },

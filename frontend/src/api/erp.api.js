@@ -57,6 +57,11 @@ export const getExpenses = () => client.get('/expenses');
 export const addExpense = (e) => client.post('/expenses', e);
 export const deleteExpense = (id) => client.delete(`/expenses/${id}`);
 
+// Buyer / seller inquiries (type: 'Buyer' | 'Seller')
+export const getInquiries = (type) => client.get('/inquiries', { params: { type } });
+export const addInquiry = (q) => client.post('/inquiries', q);
+export const deleteInquiry = (id) => client.delete(`/inquiries/${id}`);
+
 // Maintenance (repairs)
 export const getMaintenance = () => client.get('/maintenance');
 export const addMaintenance = (m) => client.post('/maintenance', m);

@@ -20,6 +20,7 @@ import SystemManagement from './pages/SystemManagement';
 import Settings from './pages/Settings';
 import AuditLog from './pages/AuditLog';
 import Maintenance from './pages/Maintenance';
+import Inquiries from './pages/Inquiries';
 import useRipple from './hooks/useRipple';
 
 export default function App() {
@@ -38,6 +39,8 @@ export default function App() {
                 <Route path="maintenance" element={<Maintenance />} />
                 <Route path="sellers" element={<Sellers />} />
                 <Route path="buyers" element={<Buyers />} />
+                <Route path="buyer-inquiries" element={<Inquiries type="Buyer" />} />
+                <Route path="seller-inquiries" element={<Inquiries type="Seller" />} />
                 <Route path="billing" element={<Billing />} />
                 <Route path="sales" element={<SalesOrders />} />
                 <Route path="payments" element={<Payments />} />

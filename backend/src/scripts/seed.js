@@ -13,6 +13,7 @@ const COUNTERS = [
   ['STG', 'StorageLedger', 'EntryID'], ['MOV', 'InventoryLedger', 'MovementID'], ['CAT', 'Category', 'CategoryID'],
   ['FLD', 'CustomField', 'FieldID'], ['EXP', 'Expense', 'ExpenseID'], ['AUD', 'AuditLog', 'AuditID'],
   ['REV', 'Reversal', 'ReversalID'], ['MNT', 'Maintenance', 'MaintenanceID'],
+  ['INQ', 'Inquiry', 'InquiryID'],
 ];
 
 async function seedDefaults() {

@@ -16,4 +16,5 @@ module.exports = {
   Reversal: require('./Reversal'),
   Counter: require('./Counter'),
   Maintenance: require('./Maintenance'),
+  Inquiry: require('./Inquiry'),
 };
