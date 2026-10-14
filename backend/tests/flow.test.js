@@ -203,3 +203,42 @@ test('storage space-days maths', () => {
   // (2 units x 5 days + 1 unit x 5 days) x 2 sq.ft = 30 space-days
   assert.equal(Math.round(spaceDaysAccrued({ SpaceSqFt: 2 }, moves, bounds, now) * 1000) / 1000, 30);
 });
+
+test('maintenance: repair cost goes on the price, not on the seller', async () => {
+  const sellerID = ok(await agent.post('/api/sellers').send({ name: 'Repair Seller' }), 201);
+  const assetID = ok(await agent.post('/api/assets').send({
+    itemName: 'Fridge', sellerID, quantity: 1, spaceSqFt: 1, reservePrice: 9000, listedPrice: 10000,
+  }), 201);
+  await fail(agent.post('/api/maintenance').send({ assetID, cost: 1000 }), 'Describe the repair.');
+  const added = ok(await agent.post('/api/maintenance').send({ assetID, cost: 1000, description: 'New compressor' }), 201);
+  assert.equal(added.costPerUnit, 1000);
+  assert.equal((await get('Asset', { AssetID: assetID })).RepairCostPerUnit, 1000);
+  const exp = await get('Expense', { MaintenanceID: added.maintenanceID });
+  assert.equal(exp.Amount, 1000);
+  assert.equal(exp.Category, 'Maintenance');
+  await fail(agent.delete(`/api/expenses/${exp.ExpenseID}`),
+    `This expense belongs to maintenance entry ${added.maintenanceID}. Void it from the Maintenance page.`);
+
+  // Full price: listed + repair. Commission only on the seller's part.
+  const preview = ok(await agent.post('/api/sales/preview').send({ assetID, quantity: 1, unitSalePrice: 11000 }));
+  assert.equal(preview.suggestedUnitPrice, 11000);
+  assert.equal(preview.commission.amount, 1000);
+  assert.equal(preview.sellerGets, 9000);
+
+  // Bargained to 10,500: the discount comes out of the seller's part.
+  await fail(agent.post('/api/sales').send({ assetID, quantity: 1, unitSalePrice: 1000 }),
+    'Unit sale price must be more than the repair cost of 1000 per unit.');
+  await fail(agent.post('/api/sales').send({ assetID, quantity: 1, unitSalePrice: 9500 }),
+    'Unit sale price is below reserve price 9000 + repair 1000. Confirm manager override to continue.');
+  const saleID = ok(await agent.post('/api/sales').send({ assetID, quantity: 1, unitSalePrice: 10500, repairCharge: 999 }), 201);
+  const sale = await get('Sale', { SaleID: saleID });
+  assert.equal(sale.RepairCharge, 1000);
+  assert.equal(sale.CommissionAmount, 950);
+  assert.equal(sale.HRGrossRevenue, 1950);
+  assert.equal(sale.SellerPayable, 8550);
+  assert.equal((await get('Seller', { SellerID: sellerID })).TotalPayable, 8550);
+
+  await fail(agent.post(`/api/maintenance/${added.maintenanceID}/void`).send({}),
+    'This product was sold after the repair, so the repair cost was already charged. It cannot be voided.');
+  assert.equal(ok(await agent.get('/api/maintenance')).length, 1);
+});

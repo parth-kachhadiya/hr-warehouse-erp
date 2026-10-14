@@ -5,7 +5,7 @@
 const { Asset, Buyer, Seller, Sale, Payment, Reversal } = require('../models');
 const { nextId, nextIds } = require('../utils/idGenerator');
 const { withTransaction } = require('../utils/transaction');
-const { num, text } = require('../utils/number');
+const { num, round2, text } = require('../utils/number');
 const AppError = require('../utils/AppError');
 const audit = require('./audit.service');
 const inventory = require('./inventory.service');
@@ -14,6 +14,26 @@ const { getSettings } = require('./settings.service');
 
 const ACTIVE_ASSET_STATUSES = ['In Stock', 'Listed'];
 
+// Splits a sale price. The product's repair cost (from Maintenance) comes back to HR first;
+// commission is charged only on what is left (the seller's part), so the seller never pays
+// for repairs. A bargained discount therefore comes out of the seller's part.
+function splitSalePrice(asset, qty, unitPrice, settings) {
+  const repairPerUnit = Number(asset.RepairCostPerUnit) || 0;
+  const price = qty * unitPrice;
+  const repair = round2(qty * repairPerUnit);
+  const sellerPart = round2(price - repair);
+  if (sellerPart <= 0) {
+    throw new AppError(400, `Unit sale price must be more than the repair cost of ${repairPerUnit} per unit.`);
+  }
+  const commission = calcCommission(sellerPart, settings);
+  const reserve = Number(asset.ReservePrice) || 0;
+  return {
+    price, repair, repairPerUnit, sellerPart, commission,
+    suggestedUnitPrice: (Number(asset.ListedPrice) || 0) + repairPerUnit,
+    belowReserve: reserve > 0 && unitPrice - repairPerUnit < reserve,
+  };
+}
+
 async function previewBilling(assetID, quantity, unitSalePrice) {
   const asset = await Asset.findOne({ AssetID: assetID }).lean();
   if (!asset) throw new AppError(404, 'Asset not found.');
@@ -21,11 +41,12 @@ async function previewBilling(assetID, quantity, unitSalePrice) {
   const available = Math.floor(Number(asset.QuantityAvailable) || 0);
   if (qty > available) throw new AppError(400, `Only ${available} unit(s) available.`);
   const unitPrice = num(unitSalePrice, 'Unit sale price', { positive: true });
-  const total = qty * unitPrice;
-  const commission = calcCommission(total, await getSettings());
+  const split = splitSalePrice(asset, qty, unitPrice, await getSettings());
   return {
-    commission, asset, quantity: qty, unitSalePrice: unitPrice, totalSalePrice: total,
-    belowReserve: Number(asset.ReservePrice) > 0 && unitPrice < Number(asset.ReservePrice),
+    commission: split.commission, asset, quantity: qty, unitSalePrice: unitPrice, totalSalePrice: split.price,
+    repairCharge: split.repair, repairPerUnit: split.repairPerUnit, sellerPart: split.sellerPart,
+    sellerGets: split.sellerPart - split.commission.amount, suggestedUnitPrice: split.suggestedUnitPrice,
+    belowReserve: split.belowReserve,
   };
 }
 
@@ -53,22 +74,23 @@ async function createSale(sale) {
   if (qty > available) throw new AppError(400, `Only ${available} unit(s) are available for this product.`);
 
   const unitPrice = num(sale.unitSalePrice, 'Unit sale price', { positive: true });
-  const price = qty * unitPrice;
+  // Repair now comes from Maintenance (sale.repairCharge is ignored).
+  const split = splitSalePrice(asset, qty, unitPrice, settings);
+  const { price, repair, commission } = split;
   const marketing = num(sale.marketingCharge || 0, 'Marketing charge', { nonnegative: true });
-  const repair = num(sale.repairCharge || 0, 'Repair charge', { nonnegative: true });
   const logistics = num(sale.logisticsCharge || 0, 'Logistics charge', { nonnegative: true });
   const received = num(sale.receivedAmount || 0, 'Received amount', { nonnegative: true });
   if (received > price) throw new AppError(400, 'Received amount cannot exceed total sale price.');
 
+  // Reserve price is the seller's minimum, so it is checked against the seller's part.
   const reserve = Number(asset.ReservePrice) || 0;
-  if (reserve > 0 && unitPrice < reserve && settings.RequireReservePriceApproval && sale.managerOverride !== true) {
-    throw new AppError(400, `Unit sale price is below reserve price ${reserve}. Confirm manager override to continue.`);
+  if (split.belowReserve && settings.RequireReservePriceApproval && sale.managerOverride !== true) {
+    throw new AppError(400, `Unit sale price is below reserve price ${reserve}${split.repairPerUnit ? ` + repair ${split.repairPerUnit}` : ''}. Confirm manager override to continue.`);
   }
 
   if (sale.buyerID && !buyer) throw new AppError(400, 'Buyer is not active.');
   const buyerName = buyer ? buyer.Name : '';
 
-  const commission = calcCommission(price, settings);
   const hrRevenue = commission.amount + marketing + repair + logistics;
   const sellerPayable = price - hrRevenue;
   if (sellerPayable < 0) throw new AppError(400, 'Charges exceed sale price.');
@@ -293,4 +315,4 @@ async function addReversal(entityType, entityID, amount, reason, details, sessio
   }).save({ session });
 }
 
-module.exports = { previewBilling, getSales, createSale, recordPayment, markOrderDelivered, voidSale, addReversal };
+module.exports = { splitSalePrice, previewBilling, getSales, createSale, recordPayment, markOrderDelivered, voidSale, addReversal };

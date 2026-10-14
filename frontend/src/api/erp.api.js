@@ -3,7 +3,7 @@
 import client from './client';
 
 // Dashboard
-export const getDashboardData = () => client.get('/dashboard');
+export const getDashboardData = () => client.get('/dashboard', { silent: true }); // polled every 3 s, so no loading bar
 
 // Sellers / Buyers
 export const getSellers = () => client.get('/sellers');
@@ -56,3 +56,8 @@ export const getDeadStockReport = () => client.get('/finance/dead-stock');
 export const getExpenses = () => client.get('/expenses');
 export const addExpense = (e) => client.post('/expenses', e);
 export const deleteExpense = (id) => client.delete(`/expenses/${id}`);
+
+// Maintenance (repairs)
+export const getMaintenance = () => client.get('/maintenance');
+export const addMaintenance = (m) => client.post('/maintenance', m);
+export const voidMaintenance = (id, reason) => client.post(`/maintenance/${id}/void`, { reason });

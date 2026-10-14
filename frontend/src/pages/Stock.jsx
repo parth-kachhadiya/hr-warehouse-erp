@@ -33,7 +33,7 @@ export default function Stock() {
       <Alert msg={error && { err: true, text: error }} />
       <Panel flush>
         <DataTable rows={data ? rows.length : -1} empty="No stock"
-          head={['ID', 'Item', 'Category', 'Grade', 'Received', 'Available', 'Reserved', 'Delivered', 'Space/Unit', 'Occupied', 'Listed/Unit ₹', 'Status', 'Change Status', 'Media', 'Action']}>
+          head={['ID', 'Item', 'Category', 'Grade', 'Received', 'Available', 'Reserved', 'Delivered', 'Space/Unit', 'Occupied', 'Listed/Unit ₹', 'Repair/Unit ₹', 'Status', 'Change Status', 'Media', 'Action']}>
           {rows.map((a) => {
             const occupied = (Number(a.SpaceSqFt) || 0) * ((Number(a.QuantityAvailable) || 0) + (Number(a.QuantityReserved) || 0));
             return (
@@ -49,6 +49,7 @@ export default function Stock() {
                 <td>{a.SpaceSqFt} sqft</td>
                 <td>{occupied.toLocaleString('en-IN')} sqft</td>
                 <td>{fmt(a.ListedPrice)}</td>
+                <td>{Number(a.RepairCostPerUnit) ? fmt(a.RepairCostPerUnit) : '-'}</td>
                 <td><Badge>{a.Status}</Badge></td>
                 <td>
                   {['Sold', 'Archived'].includes(a.Status) ? <span className="muted">Locked</span> : (

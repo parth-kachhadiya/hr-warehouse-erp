@@ -29,6 +29,9 @@ async function deleteExpense(id) {
     const expense = await Expense.findOne({ ExpenseID: id }).session(session);
     if (!expense) throw new AppError(404, 'Expense not found.');
     if ((expense.Status || 'Active') === 'Void') throw new AppError(400, 'Expense already voided.');
+    if (expense.MaintenanceID) {
+      throw new AppError(400, `This expense belongs to maintenance entry ${expense.MaintenanceID}. Void it from the Maintenance page.`);
+    }
     const amount = Number(expense.Amount) || 0;
     Object.assign(expense, { Status: 'Void', VoidDate: new Date(), VoidReason: 'Voided from ERP UI' });
     await expense.save({ session });

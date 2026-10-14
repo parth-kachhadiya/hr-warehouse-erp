@@ -7,6 +7,7 @@ const expenseSchema = new Schema(
     Category: { type: String, default: 'Other' },
     Amount: { type: Number, default: 0 },
     Notes: { type: String, default: '' },
+    MaintenanceID: { type: String, default: '' }, // set when the expense was made by a Maintenance entry
     Status: { type: String, default: 'Active' }, // Active / Void
     VoidDate: { type: Date, default: null },
     VoidReason: { type: String, default: '' },

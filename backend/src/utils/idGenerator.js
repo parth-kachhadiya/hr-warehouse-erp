@@ -16,6 +16,7 @@ const PREFIXES = {
   Expense: 'EXP',
   AuditLog: 'AUD',
   Reversal: 'REV',
+  Maintenance: 'MNT',
 };
 
 const format = (prefix, n) => `${prefix}-${String(n).padStart(4, '0')}`;

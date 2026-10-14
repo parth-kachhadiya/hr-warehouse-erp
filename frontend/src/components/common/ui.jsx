@@ -1,6 +1,7 @@
 // Small building blocks used by every page.
 import { Children, cloneElement, isValidElement } from 'react';
 import { AlertCircle, CheckCircle2, Inbox, Info } from 'lucide-react';
+import useCountUp from '../../hooks/useCountUp';
 
 export function PageHeader({ title, subtitle, children }) {
   return (
@@ -16,12 +17,13 @@ export function PageHeader({ title, subtitle, children }) {
 
 // Summary number with a coloured icon. tone: brand | green | amber | red | blue | violet | slate
 export function Stat({ icon: Icon, label, value, tone = 'brand', compact = false }) {
+  const shown = useCountUp(value);
   return (
     <div className={`stat ${compact ? 'compact' : ''}`}>
       {Icon && <div className={`stat-icon tone-${tone}`}><Icon size={compact ? 18 : 20} /></div>}
       <div className="stat-body">
         <div className="stat-label">{label}</div>
-        <div className="stat-value">{value}</div>
+        <div className="stat-value">{shown}</div>
       </div>
     </div>
   );
@@ -80,6 +82,7 @@ export function Badge({ children, tone }) {
 
 // Data table. On phones each row becomes a card, using the column names as labels.
 // rows: number of rows (pass -1 while loading) so the empty message shows only when there is nothing.
+// While loading, a few shimmering placeholder rows are shown.
 export function DataTable({ head, rows, empty = 'Nothing here yet', children, kv = false }) {
   const labelled = head
     ? Children.map(children, (tr) => (isValidElement(tr)
@@ -91,9 +94,13 @@ export function DataTable({ head, rows, empty = 'Nothing here yet', children, kv
       <table className={`data ${head ? 'stack' : ''} ${kv ? 'kv' : ''}`}>
         {head && <thead><tr>{head.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>}
         <tbody>
-          {rows === 0
-            ? <tr><td className="empty" colSpan={head ? head.length : 2}><Inbox size={28} />{empty}</td></tr>
-            : labelled}
+          {rows === 0 && <tr><td className="empty" colSpan={head ? head.length : 2}><Inbox size={28} />{empty}</td></tr>}
+          {rows === -1 && [0, 1, 2, 3].map((r) => (
+            <tr className="skeleton" key={`s${r}`} aria-hidden="true">
+              {(head || [0, 1]).map((_, i) => <td key={i}><span style={{ width: `${45 + ((r * 7 + i * 13) % 45)}%` }} /></td>)}
+            </tr>
+          ))}
+          {rows !== 0 && rows !== -1 && labelled}
         </tbody>
       </table>
     </div>

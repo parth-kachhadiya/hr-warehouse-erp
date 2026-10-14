@@ -19,8 +19,11 @@ import Finance from './pages/Finance';
 import SystemManagement from './pages/SystemManagement';
 import Settings from './pages/Settings';
 import AuditLog from './pages/AuditLog';
+import Maintenance from './pages/Maintenance';
+import useRipple from './hooks/useRipple';
 
 export default function App() {
+  useRipple();
   return (
     <BrowserRouter>
       <AuthProvider>
@@ -32,6 +35,7 @@ export default function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="add-product" element={<AddProduct />} />
                 <Route path="stock" element={<Stock />} />
+                <Route path="maintenance" element={<Maintenance />} />
                 <Route path="sellers" element={<Sellers />} />
                 <Route path="buyers" element={<Buyers />} />
                 <Route path="billing" element={<Billing />} />

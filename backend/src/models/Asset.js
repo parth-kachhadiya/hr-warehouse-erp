@@ -19,6 +19,7 @@ const assetSchema = new Schema(
     SpaceSqFt: { type: Number, default: 0 }, // per unit
     ReservePrice: { type: Number, default: 0 }, // per unit
     ListedPrice: { type: Number, default: 0 }, // per unit
+    RepairCostPerUnit: { type: Number, default: 0 }, // from Maintenance; added on top of ListedPrice
     Status: { type: String, default: 'In Stock' }, // In Stock / Listed / Damaged / Sold / Archived
     DateSold: { type: Date, default: null },
     Notes: { type: String, default: '' },

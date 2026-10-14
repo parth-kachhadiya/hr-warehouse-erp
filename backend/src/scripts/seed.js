@@ -12,7 +12,7 @@ const COUNTERS = [
   ['SAL', 'Sale', 'SaleID'], ['PAY', 'Payment', 'PaymentID'], ['STL', 'Settlement', 'SettlementID'],
   ['STG', 'StorageLedger', 'EntryID'], ['MOV', 'InventoryLedger', 'MovementID'], ['CAT', 'Category', 'CategoryID'],
   ['FLD', 'CustomField', 'FieldID'], ['EXP', 'Expense', 'ExpenseID'], ['AUD', 'AuditLog', 'AuditID'],
-  ['REV', 'Reversal', 'ReversalID'],
+  ['REV', 'Reversal', 'ReversalID'], ['MNT', 'Maintenance', 'MaintenanceID'],
 ];
 
 async function seedDefaults() {

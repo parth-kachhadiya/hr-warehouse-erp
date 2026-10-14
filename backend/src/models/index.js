@@ -15,4 +15,5 @@ module.exports = {
   AuditLog: require('./AuditLog'),
   Reversal: require('./Reversal'),
   Counter: require('./Counter'),
+  Maintenance: require('./Maintenance'),
 };
